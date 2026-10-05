@@ -35,7 +35,7 @@ Start Ollama if it is not already running (`ollama serve`), then:
 uv run streamlit run app.py
 ```
 
-Open the local URL Streamlit prints. Type a word or sentence and click **Look up**. Open **Grammar** and click **Check grammar** to get a corrected copy of your text plus a short explanation of each fix. Open **Tone** to rewrite text as neutral, professional, casual, or Gen-Z. Open **History** to review or delete words you have looked up.
+Open the local URL Streamlit prints. Type a word or sentence and click **Look up**. Open **Grammar** and click **Check grammar** to get a corrected copy of your text plus a short explanation of each fix. Open **Tone** to rewrite text as neutral, professional, casual, or Gen-Z. Open **Pronunciation** and click **Speak** to hear your text read aloud with an American accent (switch to British or pick another voice if you like). Open **History** to review or delete words you have looked up.
 
 Check that the model answers before you start the app:
 
@@ -70,12 +70,14 @@ That lookup is saved to History automatically. Looking the same word up again re
 - The app asks the model up to three times. If every answer comes back malformed, it asks you to try again instead of saving the lookup.
 - Grammar fixes come from the same local model. It can miss mistakes, and its explanations are sometimes imprecise even when the fix itself is right.
 - Non-English input is accepted. The model still tries to define it, but quality is less consistent than for common English words.
+- Pronunciation runs the Kokoro model on your computer. The first **Speak** downloads about 330 MB of model weights from Hugging Face and takes a few seconds to load; later clips are quick. Unusual names and made-up words may be mispronounced.
 - Lookup history stays in `data/history.json` on this computer. There are no accounts, and no lookup or tone rewrite is sent to a paid API.
 
 ## Credits
 
 - [Ollama](https://ollama.com/) runs the model locally.
 - [Qwen 2.5](https://ollama.com/library/qwen2.5) generates the definitions and examples.
+- [Kokoro](https://huggingface.co/hexgrad/Kokoro-82M) reads text aloud.
 - [Streamlit](https://streamlit.io/) is the web UI.
 - [uv](https://docs.astral.sh/uv/) manages Python dependencies.
 

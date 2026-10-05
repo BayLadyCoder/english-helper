@@ -4,7 +4,15 @@ import re
 
 import streamlit as st
 
-from config import MAX_GRAMMAR_LENGTH, MAX_TONE_LENGTH, TONE_OPTIONS
+import tts
+from config import (
+    ACCENTS,
+    DEFAULT_ACCENT,
+    MAX_GRAMMAR_LENGTH,
+    MAX_SPEECH_LENGTH,
+    MAX_TONE_LENGTH,
+    TONE_OPTIONS,
+)
 from llm_client import (
     LLMUnavailableError,
     MalformedLLMResponseError,
@@ -24,7 +32,8 @@ from storage import delete_entry, find_entry, load_history, save_entry
 st.set_page_config(page_title="EnglishHelper", page_icon="EH")
 st.title("EnglishHelper")
 st.write(
-    "Look up a word, fix grammar mistakes, or rewrite something you wrote in a different tone."
+    "Look up a word, fix grammar mistakes, rewrite something you wrote in a different tone, "
+    "or hear how text is pronounced."
 )
 
 if "last_entry" not in st.session_state:
@@ -33,6 +42,8 @@ if "adjusted_text" not in st.session_state:
     st.session_state.adjusted_text = None
 if "grammar_result" not in st.session_state:
     st.session_state.grammar_result = None
+if "speech" not in st.session_state:
+    st.session_state.speech = None
 
 _MARKDOWN_SPECIAL = re.compile(r"([\\`*_\[\]~#|<>$:])")
 
@@ -119,8 +130,8 @@ def render_grammar(result: dict) -> None:
                 st.caption(correction["explanation"])
 
 
-lookup_tab, grammar_tab, tone_tab, history_tab = st.tabs(
-    ["Lookup", "Grammar", "Tone", "History"]
+lookup_tab, grammar_tab, tone_tab, speech_tab, history_tab = st.tabs(
+    ["Lookup", "Grammar", "Tone", "Pronunciation", "History"]
 )
 
 with lookup_tab:
@@ -207,6 +218,47 @@ with tone_tab:
     if st.session_state.adjusted_text:
         st.subheader("Adjusted text")
         st.write(st.session_state.adjusted_text)
+
+with speech_tab:
+    speech_text = st.text_area("Text to pronounce", height=140)
+    with st.container(horizontal=True):
+        accent = st.segmented_control(
+            "Accent",
+            list(ACCENTS),
+            default=DEFAULT_ACCENT,
+            key="speech_accent",
+        )
+        voices = ACCENTS[accent or DEFAULT_ACCENT]["voices"]
+        voice_name = st.selectbox("Voice", list(voices), key=f"speech_voice_{accent}")
+    just_spoken = False
+    if st.button("Speak", icon=":material/volume_up:"):
+        try:
+            cleaned = validate_lookup_input(
+                speech_text,
+                max_length=MAX_SPEECH_LENGTH,
+                empty_message="Please enter the text you want to hear.",
+            )
+        except ValueError as exc:
+            st.error(str(exc))
+        else:
+            if not accent:
+                st.error("Choose an accent.")
+            else:
+                try:
+                    with st.spinner("Generating speech..."):
+                        samples, sample_rate = tts.synthesize(cleaned, accent, voices[voice_name])
+                    st.session_state.speech = {"samples": samples, "sample_rate": sample_rate}
+                    just_spoken = True
+                except ValueError as exc:
+                    st.error(str(exc))
+                except Exception:
+                    st.error("Speech could not be generated. Please try again.")
+    if st.session_state.speech is not None:
+        st.audio(
+            st.session_state.speech["samples"],
+            sample_rate=st.session_state.speech["sample_rate"],
+            autoplay=just_spoken,
+        )
 
 with history_tab:
     try:

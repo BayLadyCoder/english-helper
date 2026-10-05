@@ -3,10 +3,13 @@ name = "english-helper"
 version = "0.1.0"
 description = "Local vocabulary lookups and tone rewrites."
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.13"
 dependencies = [
+    "en-core-web-sm",
+    "kokoro>=0.9.4",
     "ollama>=0.6.2",
     "streamlit>=1.64.0",
+    "transformers>=4.40",
 ]
 
 [dependency-groups]
@@ -16,3 +19,6 @@ dev = [
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
+
+[tool.uv.sources]
+en-core-web-sm = { url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl" }

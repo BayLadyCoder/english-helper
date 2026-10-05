@@ -26,3 +26,26 @@ TONE_OPTIONS = (
 )
 MAX_TONE_LENGTH = 1000
 MAX_GRAMMAR_LENGTH = 1000
+MAX_SPEECH_LENGTH = 1000
+KOKORO_REPO = "hexgrad/Kokoro-82M"
+TTS_SAMPLE_RATE = 24000
+ACCENTS = {
+    "American": {
+        "lang_code": "a",
+        "voices": {
+            "Female": "af_heart",
+            # "Bella (female)": "af_bella",
+            "Male": "am_michael",
+            # "Fenrir (male)": "am_fenrir",
+        },
+    },
+    "British": {
+        "lang_code": "b",
+        "voices": {
+            "Female": "bf_emma",
+            # "Male": "bm_george",
+            "Male": "bm_fable",
+        },
+    },
+}
+DEFAULT_ACCENT = "American"
