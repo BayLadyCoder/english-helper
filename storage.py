@@ -35,6 +35,17 @@ def load_history(path: Path | None = None) -> list[dict]:
     return data
 
 
+def find_entry(word: str, path: Path | None = None) -> dict | None:
+    """Return the saved entry for this word, ignoring case, or None."""
+    key = str(word).strip().casefold()
+    if not key:
+        return None
+    for entry in load_history(_resolve_path(path)):
+        if str(entry.get("word", "")).casefold() == key:
+            return entry
+    return None
+
+
 def save_entry(entry: dict, path: Path | None = None) -> list[dict]:
     """Insert or replace an entry keyed by word, then return the list."""
     if not entry.get("word"):

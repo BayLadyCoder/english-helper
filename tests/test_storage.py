@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 from models import entry_from_lookup
-from storage import delete_entry, load_history, save_entry
+from storage import delete_entry, find_entry, load_history, save_entry
 
 EXAMPLES = [
     "I ride a bicycle.",
@@ -91,6 +91,24 @@ def test_delete_missing_word_leaves_the_list(tmp_path: Path) -> None:
     assert len(delete_entry("home", path)) == 1
     assert load_history(tmp_path / "missing.json") == []
     assert delete_entry("home", tmp_path / "missing.json") == []
+
+
+def test_find_entry_ignores_case_and_whitespace(tmp_path: Path) -> None:
+    """Find a saved word regardless of case or surrounding spaces."""
+    path = tmp_path / "history.json"
+    save_entry(_entry("Bicycle", "Spanish"), path)
+    found = find_entry("  bicycle ", path)
+    assert found is not None
+    assert found["word"] == "Bicycle"
+
+
+def test_find_entry_returns_none_when_missing(tmp_path: Path) -> None:
+    """Return None for unsaved words, blank input, or a missing file."""
+    path = tmp_path / "history.json"
+    save_entry(_entry("bicycle", "Spanish"), path)
+    assert find_entry("run", path) is None
+    assert find_entry("   ", path) is None
+    assert find_entry("bicycle", tmp_path / "missing.json") is None
 
 
 def test_missing_file_loads_empty(tmp_path: Path) -> None:

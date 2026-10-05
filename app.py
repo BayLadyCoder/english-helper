@@ -5,7 +5,7 @@ import streamlit as st
 from config import MAX_TONE_LENGTH, TONE_OPTIONS
 from llm_client import LLMUnavailableError, MalformedLLMResponseError, adjust_tone, lookup
 from models import entry_from_lookup, entry_senses, underline_lookup, validate_lookup_input
-from storage import delete_entry, load_history, save_entry
+from storage import delete_entry, find_entry, load_history, save_entry
 
 st.set_page_config(page_title="EnglishHelper", page_icon="EH")
 st.title("EnglishHelper")
@@ -72,17 +72,25 @@ with lookup_tab:
             st.error(str(exc))
         else:
             try:
-                with st.spinner("Looking up..."):
-                    payload = lookup(cleaned)
-                    entry = entry_from_lookup(cleaned, payload)
-                    save_entry(entry)
-                st.session_state.last_entry = entry
-            except LLMUnavailableError as exc:
-                st.error(str(exc))
-            except MalformedLLMResponseError:
-                st.error("The model returned an unexpected result. Please try again.")
+                saved = find_entry(cleaned)
             except OSError:
-                st.error("The history could not be saved. Please try again.")
+                saved = None
+            if saved is not None:
+                st.session_state.last_entry = saved
+                st.caption("Showing the saved result from your history.")
+            else:
+                try:
+                    with st.spinner("Looking up..."):
+                        payload = lookup(cleaned)
+                        entry = entry_from_lookup(cleaned, payload)
+                        save_entry(entry)
+                    st.session_state.last_entry = entry
+                except LLMUnavailableError as exc:
+                    st.error(str(exc))
+                except MalformedLLMResponseError:
+                    st.error("The model returned an unexpected result. Please try again.")
+                except OSError:
+                    st.error("The history could not be saved. Please try again.")
     if st.session_state.last_entry is not None:
         render_entry(st.session_state.last_entry)
 
