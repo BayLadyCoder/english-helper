@@ -1,20 +1,45 @@
-"""Streamlit UI for looking up words and reviewing lookup history."""
+"""Streamlit UI for looking up words, checking grammar, and reviewing lookup history."""
+
+import re
 
 import streamlit as st
 
-from config import MAX_TONE_LENGTH, TONE_OPTIONS
-from llm_client import LLMUnavailableError, MalformedLLMResponseError, adjust_tone, lookup
-from models import entry_from_lookup, entry_senses, underline_lookup, validate_lookup_input
+from config import MAX_GRAMMAR_LENGTH, MAX_TONE_LENGTH, TONE_OPTIONS
+from llm_client import (
+    LLMUnavailableError,
+    MalformedLLMResponseError,
+    adjust_tone,
+    check_grammar,
+    lookup,
+)
+from models import (
+    correction_segments,
+    entry_from_lookup,
+    entry_senses,
+    underline_lookup,
+    validate_lookup_input,
+)
 from storage import delete_entry, find_entry, load_history, save_entry
 
 st.set_page_config(page_title="EnglishHelper", page_icon="EH")
 st.title("EnglishHelper")
-st.write("Look up a word, or rewrite something you wrote in a different tone.")
+st.write(
+    "Look up a word, fix grammar mistakes, or rewrite something you wrote in a different tone."
+)
 
 if "last_entry" not in st.session_state:
     st.session_state.last_entry = None
 if "adjusted_text" not in st.session_state:
     st.session_state.adjusted_text = None
+if "grammar_result" not in st.session_state:
+    st.session_state.grammar_result = None
+
+_MARKDOWN_SPECIAL = re.compile(r"([\\`*_\[\]~#|<>$:])")
+
+
+def _escape_markdown(text: str) -> str:
+    """Escape characters so user text renders literally inside Markdown."""
+    return _MARKDOWN_SPECIAL.sub(r"\\\1", text)
 
 
 def _example_text(example: object) -> str:
@@ -60,8 +85,43 @@ def render_entry(entry: dict) -> None:
                 st.markdown(f"- {sentence}", unsafe_allow_html=True)
 
 
+_SEGMENT_MARKDOWN = {
+    "same": "{}",
+    "removed": ":red[~~{}~~]",
+    "added": ":green[**{}**]",
+}
 
-lookup_tab, tone_tab, history_tab = st.tabs(["Lookup", "Tone", "History"])
+
+def _correction_markdown(original: str, correction: str) -> str:
+    """Show a fix inline, striking out only the words that changed."""
+    return " ".join(
+        _SEGMENT_MARKDOWN[kind].format(_escape_markdown(words))
+        for kind, words in correction_segments(original, correction)
+    )
+
+
+def render_grammar(result: dict) -> None:
+    """Show the corrected text and explain each grammar fix."""
+    corrections = result["corrections"]
+    if not corrections and not result["changed"]:
+        st.success("No grammar mistakes found.", icon=":material/check_circle:")
+        return
+    st.subheader("Corrected text")
+    st.code(result["corrected_text"], language=None, wrap_lines=True)
+    if not corrections:
+        return
+    count = len(corrections)
+    st.subheader(f"{count} fix" if count == 1 else f"{count} fixes")
+    for correction in corrections:
+        with st.container(border=True):
+            st.markdown(_correction_markdown(correction["original"], correction["correction"]))
+            if correction["explanation"]:
+                st.caption(correction["explanation"])
+
+
+lookup_tab, grammar_tab, tone_tab, history_tab = st.tabs(
+    ["Lookup", "Grammar", "Tone", "History"]
+)
 
 with lookup_tab:
     text = st.text_input("Word, phrase, or sentence")
@@ -93,6 +153,28 @@ with lookup_tab:
                     st.error("The history could not be saved. Please try again.")
     if st.session_state.last_entry is not None:
         render_entry(st.session_state.last_entry)
+
+with grammar_tab:
+    grammar_text = st.text_area("Text to check", height=140)
+    if st.button("Check grammar"):
+        try:
+            cleaned = validate_lookup_input(
+                grammar_text,
+                max_length=MAX_GRAMMAR_LENGTH,
+                empty_message="Please enter the text you want to check.",
+            )
+        except ValueError as exc:
+            st.error(str(exc))
+        else:
+            try:
+                with st.spinner("Checking grammar..."):
+                    st.session_state.grammar_result = check_grammar(cleaned)
+            except LLMUnavailableError as exc:
+                st.error(str(exc))
+            except MalformedLLMResponseError:
+                st.error("The model returned an unexpected result. Please try again.")
+    if st.session_state.grammar_result is not None:
+        render_grammar(st.session_state.grammar_result)
 
 with tone_tab:
     tone_text = st.text_area("Text to adjust", height=140)

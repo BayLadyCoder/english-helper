@@ -2,7 +2,51 @@
 
 import pytest
 
-from models import entry_from_lookup, entry_senses, underline_lookup, validate_lookup_input
+from models import (
+    correction_segments,
+    entry_from_lookup,
+    entry_senses,
+    underline_lookup,
+    validate_lookup_input,
+)
+
+
+def test_correction_segments_mark_only_changed_words() -> None:
+    """Keep shared words plain and mark only the words that changed."""
+    assert correction_segments("go to the store", "went to the store") == [
+        ("removed", "go"),
+        ("added", "went"),
+        ("same", "to the store"),
+    ]
+    assert correction_segments("buy a apple", "bought an apple") == [
+        ("removed", "buy a"),
+        ("added", "bought an"),
+        ("same", "apple"),
+    ]
+
+
+def test_correction_segments_handle_removed_and_inserted_words() -> None:
+    """Show a dropped word as removed only and a new word as added only."""
+    assert correction_segments("am agree", "agree") == [("removed", "am"), ("same", "agree")]
+    assert correction_segments("go to office", "go to the office") == [
+        ("same", "go to"),
+        ("added", "the"),
+        ("same", "office"),
+    ]
+
+
+def test_correction_segments_catch_capitalization_and_punctuation() -> None:
+    """Treat a change in case or attached punctuation as a changed word."""
+    assert correction_segments("yesterday I", "Yesterday I") == [
+        ("removed", "yesterday"),
+        ("added", "Yesterday"),
+        ("same", "I"),
+    ]
+    assert correction_segments("However we", "However, we") == [
+        ("removed", "However"),
+        ("added", "However,"),
+        ("same", "we"),
+    ]
 
 
 def test_empty_input_raises() -> None:

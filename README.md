@@ -1,8 +1,8 @@
 # EnglishHelper
 
-EnglishHelper keeps a history of the words, phrases, and sentences you look up, and can rewrite text in a different tone. You type something in, and a local model returns each part of speech with a definition, synonyms, antonyms, three example sentences, and a sentiment label. Each successful lookup is saved on your machine.
+EnglishHelper keeps a history of the words, phrases, and sentences you look up, fixes grammar mistakes in text you wrote, and can rewrite text in a different tone. You type something in, and a local model returns each part of speech with a definition, synonyms, antonyms, three example sentences, and a sentiment label. Each successful lookup is saved on your machine.
 
-Opening a word in History shows the same definition and examples from that lookup. Tone rewrites are shown on screen and are not saved.
+Opening a word in History shows the same definition and examples from that lookup. Grammar checks and tone rewrites are shown on screen and are not saved.
 
 ## Screenshot
 
@@ -35,7 +35,7 @@ Start Ollama if it is not already running (`ollama serve`), then:
 uv run streamlit run app.py
 ```
 
-Open the local URL Streamlit prints. Type a word or sentence and click **Look up**. Open **Tone** to rewrite text as neutral, professional, casual, or Gen-Z. Open **History** to review or delete words you have looked up.
+Open the local URL Streamlit prints. Type a word or sentence and click **Look up**. Open **Grammar** and click **Check grammar** to get a corrected copy of your text plus a short explanation of each fix. Open **Tone** to rewrite text as neutral, professional, casual, or Gen-Z. Open **History** to review or delete words you have looked up.
 
 Check that the model answers before you start the app:
 
@@ -68,6 +68,7 @@ That lookup is saved to History automatically. Looking the same word up again re
 - The app does not promise a higher TOEFL, IELTS, or GRE score.
 - A small model sometimes returns a weak definition (for example, treating "run" only as operating a vehicle) or skips a part of speech. Try the lookup again if the result looks off.
 - The app asks the model up to three times. If every answer comes back malformed, it asks you to try again instead of saving the lookup.
+- Grammar fixes come from the same local model. It can miss mistakes, and its explanations are sometimes imprecise even when the fix itself is right.
 - Non-English input is accepted. The model still tries to define it, but quality is less consistent than for common English words.
 - Lookup history stays in `data/history.json` on this computer. There are no accounts, and no lookup or tone rewrite is sent to a paid API.
 
@@ -85,3 +86,9 @@ uv run pytest
 ```
 
 These tests mock the model. They do not need Ollama to be running.
+
+To score the grammar checker against the real model on a set of tricky sentences (subject-verb agreement, collective nouns, verb forms, pronoun case, and text that is already correct), run:
+
+```bash
+uv run python scripts/eval_grammar.py
+```

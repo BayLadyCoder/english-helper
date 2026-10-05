@@ -1,5 +1,6 @@
 """History entry shape and lookup-input validation shared by the app layers."""
 
+import difflib
 import html
 import re
 from dataclasses import dataclass
@@ -209,6 +210,27 @@ def underline_lookup(text: str, lookup: str) -> str:
         last = match.end()
     pieces.append(html.escape(text[last:]))
     return "".join(pieces)
+
+
+def correction_segments(original: str, correction: str) -> list[tuple[str, str]]:
+    """Split a fix into ("same" | "removed" | "added", words) pieces, word by word.
+
+    Words both versions share come back as "same", so only the changed words are
+    marked even when the model quotes a longer phrase than the mistake.
+    """
+    before = original.split()
+    after = correction.split()
+    segments: list[tuple[str, str]] = []
+    matcher = difflib.SequenceMatcher(a=before, b=after, autojunk=False)
+    for tag, start_a, end_a, start_b, end_b in matcher.get_opcodes():
+        if tag == "equal":
+            segments.append(("same", " ".join(before[start_a:end_a])))
+            continue
+        if end_a > start_a:
+            segments.append(("removed", " ".join(before[start_a:end_a])))
+        if end_b > start_b:
+            segments.append(("added", " ".join(after[start_b:end_b])))
+    return segments
 
 
 def validate_lookup_input(
