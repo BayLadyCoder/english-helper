@@ -1,8 +1,8 @@
-"""Tests for lookup input validation and flashcard records."""
+"""Tests for lookup input validation and history entries."""
 
 import pytest
 
-from models import card_from_lookup, card_senses, underline_lookup, validate_lookup_input
+from models import entry_from_lookup, entry_senses, underline_lookup, validate_lookup_input
 
 
 def test_empty_input_raises() -> None:
@@ -28,7 +28,7 @@ def test_sentence_is_stripped() -> None:
     assert validate_lookup_input("  break the ice  ") == "break the ice"
 
 
-def test_card_from_lookup_adds_word_and_timestamp() -> None:
+def test_entry_from_lookup_adds_word_and_timestamp() -> None:
     """Store the user word, language, and a created_at timestamp with the payload."""
     payload = {
         "senses": [
@@ -42,16 +42,16 @@ def test_card_from_lookup_adds_word_and_timestamp() -> None:
         ],
         "sentiment": "neutral",
     }
-    card = card_from_lookup("bicycle", payload)
-    assert card["word"] == "bicycle"
-    assert card["sentiment"] == "neutral"
-    assert card["senses"][0]["part_of_speech"] == "noun"
-    assert "translation" not in card
-    assert card["created_at"]
+    entry = entry_from_lookup("bicycle", payload)
+    assert entry["word"] == "bicycle"
+    assert entry["sentiment"] == "neutral"
+    assert entry["senses"][0]["part_of_speech"] == "noun"
+    assert "translation" not in entry
+    assert entry["created_at"]
 
 
-def test_card_senses_reads_an_older_card() -> None:
-    """Show a card saved before senses existed as a single sense."""
+def test_entry_senses_reads_an_older_entry() -> None:
+    """Show an entry saved before senses existed as a single sense."""
     old = {
         "word": "bicycle",
         "target_language": "Spanish",
@@ -63,7 +63,7 @@ def test_card_senses_reads_an_older_card() -> None:
         "sentiment": "neutral",
         "translation": "bicicleta",
     }
-    senses = card_senses(old)
+    senses = entry_senses(old)
     assert len(senses) == 1
     assert senses[0]["part_of_speech"] == "noun"
     assert senses[0]["definition"] == "A bike."

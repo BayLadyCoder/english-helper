@@ -14,7 +14,7 @@ wheels/
 .ruff_cache/
 
 # Local study data
-data/flashcards.json
+data/history.json
 data/preferences.json
 data/*.bak
 

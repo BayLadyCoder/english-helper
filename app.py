@@ -4,15 +4,15 @@ import streamlit as st
 
 from config import MAX_TONE_LENGTH, TONE_OPTIONS
 from llm_client import LLMUnavailableError, MalformedLLMResponseError, adjust_tone, lookup
-from models import card_from_lookup, card_senses, underline_lookup, validate_lookup_input
-from storage import delete_flashcard, load_flashcards, save_flashcard
+from models import entry_from_lookup, entry_senses, underline_lookup, validate_lookup_input
+from storage import delete_entry, load_history, save_entry
 
 st.set_page_config(page_title="EnglishHelper", page_icon="EH")
 st.title("EnglishHelper")
 st.write("Look up a word, or rewrite something you wrote in a different tone.")
 
-if "last_card" not in st.session_state:
-    st.session_state.last_card = None
+if "last_entry" not in st.session_state:
+    st.session_state.last_entry = None
 if "adjusted_text" not in st.session_state:
     st.session_state.adjusted_text = None
 
@@ -34,17 +34,17 @@ def _sentiment_color(label: str) -> str:
     return "#3d4f66"
 
 
-def render_card(card: dict) -> None:
+def render_entry(entry: dict) -> None:
     """Show one looked-up word, including its definitions and examples."""
-    st.subheader(card["word"])
-    sentiment = card["sentiment"]
+    st.subheader(entry["word"])
+    sentiment = entry["sentiment"]
     color = _sentiment_color(sentiment)
     st.markdown(
         f"**Sentiment:** <span style='color: {color}'>{sentiment}</span>",
         unsafe_allow_html=True,
     )
-    lookup_text = str(card.get("word", ""))
-    senses = card_senses(card)
+    lookup_text = str(entry.get("word", ""))
+    senses = entry_senses(entry)
     for sense in senses:
         with st.container(border=True):
             part_of_speech = str(sense.get("part_of_speech", "unknown")).capitalize()
@@ -74,17 +74,17 @@ with lookup_tab:
             try:
                 with st.spinner("Looking up..."):
                     payload = lookup(cleaned)
-                    card = card_from_lookup(cleaned, payload)
-                    save_flashcard(card)
-                st.session_state.last_card = card
+                    entry = entry_from_lookup(cleaned, payload)
+                    save_entry(entry)
+                st.session_state.last_entry = entry
             except LLMUnavailableError as exc:
                 st.error(str(exc))
             except MalformedLLMResponseError:
                 st.error("The model returned an unexpected result. Please try again.")
             except OSError:
                 st.error("The history could not be saved. Please try again.")
-    if st.session_state.last_card is not None:
-        render_card(st.session_state.last_card)
+    if st.session_state.last_entry is not None:
+        render_entry(st.session_state.last_entry)
 
 with tone_tab:
     tone_text = st.text_area("Text to adjust", height=140)
@@ -120,25 +120,25 @@ with tone_tab:
 
 with history_tab:
     try:
-        cards = load_flashcards()
+        entries = load_history()
     except OSError:
         st.error("The history could not be loaded.")
-        cards = []
-    if not cards:
+        entries = []
+    if not entries:
         st.info("No lookups yet.")
     else:
-        ordered = sorted(cards, key=lambda card: card.get("created_at", ""), reverse=True)
-        for index, card in enumerate(ordered):
-            title = str(card.get("word", "Untitled"))
+        ordered = sorted(entries, key=lambda entry: entry.get("created_at", ""), reverse=True)
+        for index, entry in enumerate(ordered):
+            title = str(entry.get("word", "Untitled"))
             with st.expander(title):
-                render_card(card)
+                render_entry(entry)
                 if st.button("Delete", key=f"delete-{index}-{title.casefold()}"):
                     try:
-                        delete_flashcard(title)
+                        delete_entry(title)
                     except OSError:
                         st.error("The history could not be updated.")
                     else:
-                        last_card = st.session_state.last_card
-                        if last_card and str(last_card.get("word", "")).casefold() == title.casefold():
-                            st.session_state.last_card = None
+                        last_entry = st.session_state.last_entry
+                        if last_entry and str(last_entry.get("word", "")).casefold() == title.casefold():
+                            st.session_state.last_entry = None
                         st.rerun()

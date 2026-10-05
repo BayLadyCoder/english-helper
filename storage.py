@@ -1,14 +1,14 @@
-"""Load, save, and dedupe flashcards in a local JSON file."""
+"""Load, save, and dedupe lookup history in a local JSON file."""
 
 import json
 from pathlib import Path
 
-from config import FLASHCARDS_PATH
+from config import HISTORY_PATH
 
 
 def _resolve_path(path: Path | None) -> Path:
-    """Use the given path, or the default flashcard file."""
-    return path if path is not None else FLASHCARDS_PATH
+    """Use the given path, or the default history file."""
+    return path if path is not None else HISTORY_PATH
 
 
 def _backup_corrupt_file(path: Path) -> None:
@@ -19,8 +19,8 @@ def _backup_corrupt_file(path: Path) -> None:
     path.rename(backup)
 
 
-def load_flashcards(path: Path | None = None) -> list[dict]:
-    """Return saved flashcards, or an empty list if the file is missing or corrupt."""
+def load_history(path: Path | None = None) -> list[dict]:
+    """Return saved lookups, or an empty list if the file is missing or corrupt."""
     file_path = _resolve_path(path)
     if not file_path.exists():
         return []
@@ -35,40 +35,40 @@ def load_flashcards(path: Path | None = None) -> list[dict]:
     return data
 
 
-def save_flashcard(card: dict, path: Path | None = None) -> list[dict]:
-    """Insert or replace a card keyed by word, then return the list."""
-    if not card.get("word"):
-        raise ValueError("A flashcard needs a word.")
+def save_entry(entry: dict, path: Path | None = None) -> list[dict]:
+    """Insert or replace an entry keyed by word, then return the list."""
+    if not entry.get("word"):
+        raise ValueError("A history entry needs a word.")
     file_path = _resolve_path(path)
-    cards = load_flashcards(file_path)
-    key = str(card["word"]).casefold()
+    entries = load_history(file_path)
+    key = str(entry["word"]).casefold()
     replaced = False
-    for index, existing in enumerate(cards):
+    for index, existing in enumerate(entries):
         if str(existing.get("word", "")).casefold() != key:
             continue
-        updated = dict(card)
-        updated["created_at"] = existing.get("created_at", card.get("created_at"))
-        updated["updated_at"] = card.get("created_at")
-        cards[index] = updated
+        updated = dict(entry)
+        updated["created_at"] = existing.get("created_at", entry.get("created_at"))
+        updated["updated_at"] = entry.get("created_at")
+        entries[index] = updated
         replaced = True
         break
     if not replaced:
-        cards.append(card)
+        entries.append(entry)
     file_path.parent.mkdir(parents=True, exist_ok=True)
-    file_path.write_text(json.dumps(cards, indent=2), encoding="utf-8")
-    return cards
+    file_path.write_text(json.dumps(entries, indent=2), encoding="utf-8")
+    return entries
 
 
-def delete_flashcard(word: str, path: Path | None = None) -> list[dict]:
-    """Remove the saved card for this word and return the remaining list."""
+def delete_entry(word: str, path: Path | None = None) -> list[dict]:
+    """Remove the saved entry for this word and return the remaining list."""
     if not str(word).strip():
-        raise ValueError("A flashcard needs a word.")
+        raise ValueError("A history entry needs a word.")
     file_path = _resolve_path(path)
-    cards = load_flashcards(file_path)
+    entries = load_history(file_path)
     key = str(word).casefold()
-    kept = [card for card in cards if str(card.get("word", "")).casefold() != key]
-    if len(kept) == len(cards):
-        return cards
+    kept = [entry for entry in entries if str(entry.get("word", "")).casefold() != key]
+    if len(kept) == len(entries):
+        return entries
     file_path.parent.mkdir(parents=True, exist_ok=True)
     file_path.write_text(json.dumps(kept, indent=2), encoding="utf-8")
     return kept

@@ -1,7 +1,7 @@
 [project]
 name = "english-helper"
 version = "0.1.0"
-description = "Local vocabulary flashcards from a single lookup."
+description = "Local vocabulary lookups and tone rewrites."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

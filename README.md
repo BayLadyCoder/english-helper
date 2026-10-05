@@ -2,11 +2,11 @@
 
 EnglishHelper keeps a history of the words, phrases, and sentences you look up, and can rewrite text in a different tone. You type something in, and a local model returns each part of speech with a definition, synonyms, antonyms, three example sentences, and a sentiment label. Each successful lookup is saved on your machine.
 
-Opening a word in History shows the same definition and examples from that lookup.
+Opening a word in History shows the same definition and examples from that lookup. Tone rewrites are shown on screen and are not saved.
 
 ## Screenshot
 
-The Lookup tab shows the definition and examples after you submit a word. The History tab reads the same lookups back from `data/flashcards.json`.
+The Lookup tab shows the definition and examples after you submit a word. The History tab reads the same lookups back from `data/history.json`.
 
 Capture a screenshot after you run the app and drop it here if you want one in the repo.
 
@@ -35,7 +35,7 @@ Start Ollama if it is not already running (`ollama serve`), then:
 uv run streamlit run app.py
 ```
 
-Open the local URL Streamlit prints. Type a word or sentence and click **Look up**. Open **Tone** to rewrite text as neutral, professional, casual, or Gen-Z. Open **History** to review words you have looked up.
+Open the local URL Streamlit prints. Type a word or sentence and click **Look up**. Open **Tone** to rewrite text as neutral, professional, casual, or Gen-Z. Open **History** to review or delete words you have looked up.
 
 Check that the model answers before you start the app:
 
@@ -59,7 +59,7 @@ Examples:
 - He broke the ice by sharing a funny story.
 ```
 
-That lookup is saved automatically. Looking the same word up again replaces the older entry instead of adding a second one.
+That lookup is saved to History automatically. Looking the same word up again replaces the older entry instead of adding a second one.
 
 ## Known limitations
 
@@ -67,9 +67,9 @@ That lookup is saved automatically. Looking the same word up again replaces the 
 - Sentiment on a single word is a rough label, not an analysis you should treat as precise.
 - The app does not promise a higher TOEFL, IELTS, or GRE score.
 - A small model sometimes returns a weak definition (for example, treating "run" only as operating a vehicle) or skips a part of speech. Try the lookup again if the result looks off.
-- If both attempts come back malformed, the app asks you to try again instead of saving the lookup.
+- The app asks the model up to three times. If every answer comes back malformed, it asks you to try again instead of saving the lookup.
 - Non-English input is accepted. The model still tries to define it, but quality is less consistent than for common English words.
-- Lookups stay in `data/flashcards.json` on this computer. There are no accounts, and no lookup is sent to a paid API.
+- Lookup history stays in `data/history.json` on this computer. There are no accounts, and no lookup or tone rewrite is sent to a paid API.
 
 ## Credits
 

@@ -5,7 +5,7 @@ from pathlib import Path
 MODEL_NAME = "qwen2.5"
 OLLAMA_HOST = "http://localhost:11434"
 MAX_INPUT_LENGTH = 300
-FLASHCARDS_PATH = Path("data/flashcards.json")
+HISTORY_PATH = Path("data/history.json")
 REQUIRED_FIELDS = (
     "senses",
     "sentiment",

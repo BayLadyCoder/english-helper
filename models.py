@@ -1,4 +1,4 @@
-"""Flashcard shape and lookup-input validation shared by the app layers."""
+"""History entry shape and lookup-input validation shared by the app layers."""
 
 import html
 import re
@@ -9,8 +9,8 @@ from config import MAX_INPUT_LENGTH
 
 
 @dataclass
-class Flashcard:
-    """One saved vocabulary card, including the fields the model returns."""
+class LookupEntry:
+    """One saved lookup, including the fields the model returns."""
 
     word: str
     senses: list[dict]
@@ -31,31 +31,31 @@ class Flashcard:
         return data
 
     @classmethod
-    def from_dict(cls, data: dict) -> "Flashcard":
-        """Build a flashcard from a stored or model-merged dictionary."""
+    def from_dict(cls, data: dict) -> "LookupEntry":
+        """Build an entry from a stored or model-merged dictionary."""
         return cls(
             word=data["word"],
-            senses=card_senses(data),
+            senses=entry_senses(data),
             sentiment=data["sentiment"],
             created_at=data["created_at"],
             updated_at=data.get("updated_at"),
         )
 
 
-def card_senses(card: dict) -> list[dict]:
-    """Return the senses of a card, adapting cards saved before senses existed."""
-    senses = card.get("senses")
+def entry_senses(entry: dict) -> list[dict]:
+    """Return the senses of an entry, adapting entries saved before senses existed."""
+    senses = entry.get("senses")
     if isinstance(senses, list) and senses:
         return list(senses)
-    if "definition" not in card:
+    if "definition" not in entry:
         return []
     return [
         {
-            "part_of_speech": card.get("part_of_speech", ""),
-            "definition": card.get("definition", ""),
-            "synonyms": list(card.get("synonyms", [])),
-            "antonyms": list(card.get("antonyms", [])),
-            "examples": list(card.get("examples", [])),
+            "part_of_speech": entry.get("part_of_speech", ""),
+            "definition": entry.get("definition", ""),
+            "synonyms": list(entry.get("synonyms", [])),
+            "antonyms": list(entry.get("antonyms", [])),
+            "examples": list(entry.get("examples", [])),
         }
     ]
 
@@ -226,13 +226,13 @@ def validate_lookup_input(
     return cleaned
 
 
-def card_from_lookup(word: str, payload: dict) -> dict:
+def entry_from_lookup(word: str, payload: dict) -> dict:
     """Merge a validated model payload with the lookup word and a timestamp."""
     created_at = datetime.now(timezone.utc).isoformat()
-    card = Flashcard(
+    entry = LookupEntry(
         word=word,
         senses=list(payload["senses"]),
         sentiment=payload["sentiment"],
         created_at=created_at,
     )
-    return card.to_dict()
+    return entry.to_dict()

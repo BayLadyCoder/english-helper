@@ -11,7 +11,7 @@ from llm_client import (
     build_prompt,
     call_model,
     lookup,
-    parse_flashcard,
+    parse_lookup,
     adjust_tone,
 )
 
@@ -45,7 +45,7 @@ def _sense(**overrides: object) -> dict:
 
 def test_parse_valid_json() -> None:
     """Accept a payload that has every required key and the right types."""
-    parsed = parse_flashcard(json.dumps(VALID))
+    parsed = parse_lookup(json.dumps(VALID))
     assert parsed["senses"][0]["definition"] == NOUN_SENSE["definition"]
     assert parsed["senses"][0]["examples"] == EXAMPLES
 
@@ -61,14 +61,14 @@ def test_multiple_parts_of_speech_are_kept() -> None:
             "He bicycles daily.",
         ],
     )
-    parsed = parse_flashcard(_payload(senses=[NOUN_SENSE, verb]))
+    parsed = parse_lookup(_payload(senses=[NOUN_SENSE, verb]))
     assert [sense["part_of_speech"] for sense in parsed["senses"]] == ["noun", "verb"]
     assert len(parsed["senses"][1]["examples"]) == 3
 
 
 def test_duplicate_part_of_speech_is_dropped() -> None:
     """Keep the first sense when the model repeats a part of speech."""
-    parsed = parse_flashcard(_payload(senses=[NOUN_SENSE, _sense(definition="Another bike.")]))
+    parsed = parse_lookup(_payload(senses=[NOUN_SENSE, _sense(definition="Another bike.")]))
     assert len(parsed["senses"]) == 1
 
 
@@ -84,7 +84,7 @@ def test_verb_noun_example_is_rejected() -> None:
         ],
     )
     with pytest.raises(MalformedLLMResponseError, match="as a noun"):
-        parse_flashcard(_payload(senses=[verb]), "light")
+        parse_lookup(_payload(senses=[verb]), "light")
 
 
 def test_lenient_parse_keeps_good_verb_examples() -> None:
@@ -98,7 +98,7 @@ def test_lenient_parse_keeps_good_verb_examples() -> None:
             "He lightened the mood.",
         ],
     )
-    parsed = parse_flashcard(_payload(senses=[verb]), "light", False)
+    parsed = parse_lookup(_payload(senses=[verb]), "light", False)
     assert parsed["senses"][0]["examples"] == [
         "She lit the candle.",
         "He lightened the mood.",
@@ -118,8 +118,8 @@ def test_light_requires_noun_verb_adjective() -> None:
         examples=["The bag felt light.", "She wore a light coat.", "The box was light."],
     )
     with pytest.raises(MalformedLLMResponseError, match="Missing: adjective"):
-        parse_flashcard(_payload(senses=[NOUN_SENSE, verb]), "light")
-    parsed = parse_flashcard(_payload(senses=[NOUN_SENSE, verb, adjective]), "light")
+        parse_lookup(_payload(senses=[NOUN_SENSE, verb]), "light")
+    parsed = parse_lookup(_payload(senses=[NOUN_SENSE, verb, adjective]), "light")
     assert {_normalize_pos(s["part_of_speech"]) for s in parsed["senses"]} == {
         "noun",
         "verb",
@@ -130,7 +130,7 @@ def test_light_requires_noun_verb_adjective() -> None:
 def test_empty_senses_raises() -> None:
     """Reject a payload with no parts of speech."""
     with pytest.raises(MalformedLLMResponseError):
-        parse_flashcard(_payload(senses=[]))
+        parse_lookup(_payload(senses=[]))
 
 
 def test_sense_missing_definition_raises() -> None:
@@ -138,7 +138,7 @@ def test_sense_missing_definition_raises() -> None:
     broken = dict(NOUN_SENSE)
     del broken["definition"]
     with pytest.raises(MalformedLLMResponseError):
-        parse_flashcard(_payload(senses=[broken]))
+        parse_lookup(_payload(senses=[broken]))
 
 
 def test_missing_key_raises() -> None:
@@ -146,38 +146,38 @@ def test_missing_key_raises() -> None:
     payload = dict(VALID)
     del payload["sentiment"]
     with pytest.raises(MalformedLLMResponseError):
-        parse_flashcard(json.dumps(payload))
+        parse_lookup(json.dumps(payload))
 
 
 def test_non_json_raises() -> None:
     """Reject text that is not JSON."""
     with pytest.raises(MalformedLLMResponseError):
-        parse_flashcard("not json")
+        parse_lookup("not json")
 
 
 def test_string_where_list_required_raises() -> None:
     """Reject a string in a field that must be a list."""
     with pytest.raises(MalformedLLMResponseError):
-        parse_flashcard(_payload(senses=[_sense(synonyms="bike")]))
+        parse_lookup(_payload(senses=[_sense(synonyms="bike")]))
 
 
 def test_two_examples_fail() -> None:
     """Reject fewer than three example sentences."""
     with pytest.raises(MalformedLLMResponseError):
-        parse_flashcard(_payload(senses=[_sense(examples=EXAMPLES[:2])]))
+        parse_lookup(_payload(senses=[_sense(examples=EXAMPLES[:2])]))
 
 
 def test_four_examples_keep_first_three() -> None:
     """Keep only the first three examples when the model returns more."""
     extra = "Four."
-    parsed = parse_flashcard(_payload(senses=[_sense(examples=[*EXAMPLES, extra])]))
+    parsed = parse_lookup(_payload(senses=[_sense(examples=[*EXAMPLES, extra])]))
     assert parsed["senses"][0]["examples"] == EXAMPLES
 
 
 def test_blank_example_fails() -> None:
     """Reject an example list that includes a blank sentence."""
     with pytest.raises(MalformedLLMResponseError):
-        parse_flashcard(_payload(senses=[_sense(examples=["", EXAMPLES[1], EXAMPLES[2]])]))
+        parse_lookup(_payload(senses=[_sense(examples=["", EXAMPLES[1], EXAMPLES[2]])]))
 
 
 def test_prompt_contains_the_lookup() -> None:
@@ -210,7 +210,7 @@ def test_strips_terminal_color_codes() -> None:
         EXAMPLES[1],
         EXAMPLES[2],
     ]
-    parsed = parse_flashcard(_payload(senses=[_sense(examples=colored)]))
+    parsed = parse_lookup(_payload(senses=[_sense(examples=colored)]))
     assert parsed["senses"][0]["examples"][0] == "The bank is closed."
 
 

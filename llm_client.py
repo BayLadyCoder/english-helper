@@ -154,8 +154,8 @@ def build_prompt(text: str) -> str:
     return PROMPT_TEMPLATE.format(text=safe_text)
 
 
-def parse_flashcard(raw: str, word: str = "", strict: bool = True) -> dict:
-    """Parse model JSON and require the flashcard fields and types."""
+def parse_lookup(raw: str, word: str = "", strict: bool = True) -> dict:
+    """Parse model JSON and require the lookup fields and types."""
     try:
         data = json.loads(raw)
     except json.JSONDecodeError as exc:
@@ -211,7 +211,7 @@ def _verb_examples(
     """Return verb examples that use the word as an action.
 
     Strict mode raises so the caller can ask the model again. Lenient mode keeps the
-    usable examples so a weak answer still produces a card.
+    usable examples so a weak answer still produces a result.
     """
     good = [sentence for sentence in examples if not _is_noun_use(sentence, word)]
     bad = [sentence for sentence in examples if _is_noun_use(sentence, word)]
@@ -348,7 +348,7 @@ def lookup(text: str) -> dict:
         strict = attempt < _MAX_LOOKUP_ATTEMPTS - 1
         try:
             raw = call_model(attempt_prompt, json_mode=True)
-            return parse_flashcard(raw, text, strict)
+            return parse_lookup(raw, text, strict)
         except (json.JSONDecodeError, MalformedLLMResponseError) as exc:
             last_error = exc
     raise MalformedLLMResponseError(
