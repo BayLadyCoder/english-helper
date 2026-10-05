@@ -1,0 +1,23 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Test and tool caches
+.pytest_cache/
+.ruff_cache/
+
+# Local study data
+data/flashcards.json
+data/preferences.json
+data/*.bak
+
+# Secrets and OS files
+.env
+.DS_Store

@@ -1,0 +1,238 @@
+"""Flashcard shape and lookup-input validation shared by the app layers."""
+
+import html
+import re
+from dataclasses import dataclass
+from datetime import datetime, timezone
+
+from config import MAX_INPUT_LENGTH
+
+
+@dataclass
+class Flashcard:
+    """One saved vocabulary card, including the fields the model returns."""
+
+    word: str
+    senses: list[dict]
+    sentiment: str
+    created_at: str
+    updated_at: str | None = None
+
+    def to_dict(self) -> dict:
+        """Return a JSON-ready dictionary, omitting an unset updated_at."""
+        data = {
+            "word": self.word,
+            "senses": self.senses,
+            "sentiment": self.sentiment,
+            "created_at": self.created_at,
+        }
+        if self.updated_at is not None:
+            data["updated_at"] = self.updated_at
+        return data
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "Flashcard":
+        """Build a flashcard from a stored or model-merged dictionary."""
+        return cls(
+            word=data["word"],
+            senses=card_senses(data),
+            sentiment=data["sentiment"],
+            created_at=data["created_at"],
+            updated_at=data.get("updated_at"),
+        )
+
+
+def card_senses(card: dict) -> list[dict]:
+    """Return the senses of a card, adapting cards saved before senses existed."""
+    senses = card.get("senses")
+    if isinstance(senses, list) and senses:
+        return list(senses)
+    if "definition" not in card:
+        return []
+    return [
+        {
+            "part_of_speech": card.get("part_of_speech", ""),
+            "definition": card.get("definition", ""),
+            "synonyms": list(card.get("synonyms", [])),
+            "antonyms": list(card.get("antonyms", [])),
+            "examples": list(card.get("examples", [])),
+        }
+    ]
+
+
+_VOWELS = set("aeiou")
+_IRREGULAR_VERBS = {
+    "be": {"am", "is", "are", "was", "were", "been", "being"},
+    "bear": {"bore", "born", "borne"},
+    "beat": {"beaten"},
+    "become": {"became"},
+    "begin": {"began", "begun"},
+    "bite": {"bit", "bitten"},
+    "blow": {"blew", "blown"},
+    "break": {"broke", "broken"},
+    "bring": {"brought"},
+    "build": {"built"},
+    "buy": {"bought"},
+    "catch": {"caught"},
+    "choose": {"chose", "chosen"},
+    "come": {"came"},
+    "cut": set(),
+    "deal": {"dealt"},
+    "do": {"does", "did", "done"},
+    "draw": {"drew", "drawn"},
+    "drink": {"drank", "drunk"},
+    "drive": {"drove", "driven"},
+    "eat": {"ate", "eaten"},
+    "fall": {"fell", "fallen"},
+    "feel": {"felt"},
+    "fight": {"fought"},
+    "find": {"found"},
+    "fly": {"flew", "flown"},
+    "forget": {"forgot", "forgotten"},
+    "forgive": {"forgave", "forgiven"},
+    "freeze": {"froze", "frozen"},
+    "get": {"got", "gotten"},
+    "give": {"gave", "given"},
+    "go": {"went", "gone", "goes"},
+    "grow": {"grew", "grown"},
+    "hang": {"hung"},
+    "have": {"has", "had"},
+    "hear": {"heard"},
+    "hide": {"hid", "hidden"},
+    "hit": set(),
+    "hold": {"held"},
+    "hurt": set(),
+    "keep": {"kept"},
+    "know": {"knew", "known"},
+    "lead": {"led"},
+    "leave": {"left"},
+    "lend": {"lent"},
+    "let": set(),
+    "lie": {"lay", "lain"},
+    "light": {"lit"},
+    "lose": {"lost"},
+    "make": {"made"},
+    "mean": {"meant"},
+    "meet": {"met"},
+    "pay": {"paid"},
+    "put": set(),
+    "read": set(),
+    "ride": {"rode", "ridden"},
+    "ring": {"rang", "rung"},
+    "rise": {"rose", "risen"},
+    "run": {"ran"},
+    "say": {"said"},
+    "see": {"saw", "seen"},
+    "seek": {"sought"},
+    "sell": {"sold"},
+    "send": {"sent"},
+    "set": set(),
+    "shake": {"shook", "shaken"},
+    "shine": {"shone"},
+    "show": {"shown"},
+    "shut": set(),
+    "sing": {"sang", "sung"},
+    "sink": {"sank", "sunk"},
+    "sit": {"sat"},
+    "sleep": {"slept"},
+    "speak": {"spoke", "spoken"},
+    "spend": {"spent"},
+    "stand": {"stood"},
+    "steal": {"stole", "stolen"},
+    "swim": {"swam", "swum"},
+    "take": {"took", "taken"},
+    "teach": {"taught"},
+    "tear": {"tore", "torn"},
+    "tell": {"told"},
+    "think": {"thought"},
+    "throw": {"threw", "thrown"},
+    "understand": {"understood"},
+    "wake": {"woke", "woken"},
+    "wear": {"wore", "worn"},
+    "win": {"won"},
+    "write": {"wrote", "written"},
+}
+
+
+def _doubles_final_consonant(verb: str) -> bool:
+    """Return whether a short verb doubles its last letter before -ed or -ing."""
+    if len(verb) < 3 or verb[-1] in _VOWELS or verb[-1] in "wxy":
+        return False
+    return verb[-2] in _VOWELS and verb[-3] not in _VOWELS
+
+
+def _verb_forms(verb: str) -> set[str]:
+    """Return the base verb plus regular and irregular tense forms."""
+    word = verb.casefold()
+    forms = {word, word + "s", word + "ed", word + "ing"}
+    if word.endswith("e"):
+        forms.add(word + "d")
+        forms.add(word[:-1] + "ing")
+    if word.endswith("y") and len(word) > 1 and word[-2] not in _VOWELS:
+        forms.add(word[:-1] + "ies")
+        forms.add(word[:-1] + "ied")
+    if word.endswith(("s", "x", "z", "ch", "sh", "o")):
+        forms.add(word + "es")
+    if _doubles_final_consonant(word):
+        forms.add(word + word[-1] + "ed")
+        forms.add(word + word[-1] + "ing")
+    forms.update(_IRREGULAR_VERBS.get(word, set()))
+    return forms
+
+
+def _lookup_forms(lookup: str) -> list[str]:
+    """Return match strings, longest first, including a changed verb tense."""
+    parts = lookup.split()
+    if len(parts) > 1:
+        forms = {" ".join([form, *parts[1:]]) for form in _verb_forms(parts[0])}
+        forms.add(lookup)
+    else:
+        forms = _verb_forms(lookup)
+        forms.add(lookup.casefold())
+    return sorted(forms, key=len, reverse=True)
+
+
+def underline_lookup(text: str, lookup: str) -> str:
+    """Return HTML with the lookup, including a changed verb tense, underlined."""
+    cleaned = lookup.strip()
+    if not text:
+        return ""
+    if not cleaned:
+        return html.escape(text)
+    alternatives = "|".join(re.escape(form) for form in _lookup_forms(cleaned))
+    pattern = re.compile(rf"\b(?:{alternatives})\b", re.IGNORECASE)
+    pieces: list[str] = []
+    last = 0
+    for match in pattern.finditer(text):
+        pieces.append(html.escape(text[last : match.start()]))
+        pieces.append(f"<u>{html.escape(match.group(0))}</u>")
+        last = match.end()
+    pieces.append(html.escape(text[last:]))
+    return "".join(pieces)
+
+
+def validate_lookup_input(
+    text: str,
+    *,
+    max_length: int = MAX_INPUT_LENGTH,
+    empty_message: str = "Please enter a word, phrase, or sentence.",
+) -> str:
+    """Clean and validate text the user typed."""
+    cleaned = text.strip()
+    if not cleaned:
+        raise ValueError(empty_message)
+    if len(cleaned) > max_length:
+        raise ValueError("Input is too long. Enter a sentence, not a paragraph.")
+    return cleaned
+
+
+def card_from_lookup(word: str, payload: dict) -> dict:
+    """Merge a validated model payload with the lookup word and a timestamp."""
+    created_at = datetime.now(timezone.utc).isoformat()
+    card = Flashcard(
+        word=word,
+        senses=list(payload["senses"]),
+        sentiment=payload["sentiment"],
+        created_at=created_at,
+    )
+    return card.to_dict()
