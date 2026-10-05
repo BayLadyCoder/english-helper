@@ -231,7 +231,7 @@ with speech_tab:
         voices = ACCENTS[accent or DEFAULT_ACCENT]["voices"]
         voice_name = st.selectbox("Voice", list(voices), key=f"speech_voice_{accent}")
     just_spoken = False
-    if st.button("Speak", icon=":material/volume_up:"):
+    if st.button("Generate Speech", icon=":material/volume_up:"):
         try:
             cleaned = validate_lookup_input(
                 speech_text,
