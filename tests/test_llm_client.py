@@ -10,7 +10,7 @@ from llm_client import (
     _normalize_pos,
     build_prompt,
     call_model,
-    generate_story,
+    generate_study,
     lookup,
     parse_lookup,
     adjust_tone,
@@ -286,7 +286,7 @@ def test_lookup_stops_after_three_attempts(monkeypatch: pytest.MonkeyPatch) -> N
     assert "non-empty" in calls["prompts"][1]
 
 
-def test_generate_story_uses_every_word(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_generate_study_story_uses_every_word(monkeypatch: pytest.MonkeyPatch) -> None:
     """Send each word to the model and return the story in one call."""
     prompts: list[str] = []
 
@@ -295,13 +295,29 @@ def test_generate_story_uses_every_word(monkeypatch: pytest.MonkeyPatch) -> None
         return "Mia lit a candle and felt brave."
 
     monkeypatch.setattr("llm_client.call_model", fake_call)
-    assert generate_story(["light", "brave"]) == "Mia lit a candle and felt brave."
+    assert generate_study(["light", "brave"], "Story") == "Mia lit a candle and felt brave."
     assert len(prompts) == 1
     assert "- light\n- brave" in prompts[0]
+    assert "story" in prompts[0]
 
 
-def test_generate_story_retries_with_skipped_words(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Ask again, naming the words the first story left out."""
+def test_generate_study_conversation_prompt(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Ask for speaker lines when a conversation is chosen."""
+    prompts: list[str] = []
+    reply = "Anna: Did you light the candle?\nBen: Yes, I was brave."
+
+    def fake_call(prompt: str, **_: object) -> str:
+        prompts.append(prompt)
+        return reply
+
+    monkeypatch.setattr("llm_client.call_model", fake_call)
+    assert generate_study(["light", "brave"], "Conversation") == reply
+    assert "Anna: ..." in prompts[0]
+    assert "in the conversation" in prompts[0]
+
+
+def test_generate_study_retries_with_skipped_words(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Ask again, naming the words the first answer left out."""
     replies = iter(["Mia felt brave.", "Mia lit a candle and felt brave."])
     prompts: list[str] = []
 
@@ -310,18 +326,19 @@ def test_generate_story_retries_with_skipped_words(monkeypatch: pytest.MonkeyPat
         return next(replies)
 
     monkeypatch.setattr("llm_client.call_model", fake_call)
-    assert generate_story(["light", "brave"]) == "Mia lit a candle and felt brave."
+    assert generate_study(["light", "brave"], "Story") == "Mia lit a candle and felt brave."
     assert '"light"' in prompts[1]
 
 
-def test_generate_story_rejects_empty_selection() -> None:
-    """Refuse to call the model without words."""
+@pytest.mark.parametrize("words, style", [(["  "], "Story"), (["light"], "Poem")])
+def test_generate_study_rejects_bad_input(words: list[str], style: str) -> None:
+    """Refuse to call the model without words or with an unknown format."""
     with pytest.raises(ValueError):
-        generate_story(["  "])
+        generate_study(words, style)
 
 
-def test_generate_story_empty_reply_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_generate_study_empty_reply_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     """Treat a blank model reply as malformed."""
     monkeypatch.setattr("llm_client.call_model", lambda *_args, **_kwargs: "  ")
     with pytest.raises(MalformedLLMResponseError):
-        generate_story(["light"])
+        generate_study(["light"], "Conversation")

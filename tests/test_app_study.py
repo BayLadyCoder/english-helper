@@ -11,6 +11,10 @@ HISTORY = [
     {"word": "light", "senses": [], "sentiment": "neutral", "created_at": "2026-01-02"},
     {"word": "storm", "senses": [], "sentiment": "negative", "created_at": "2026-01-03"},
 ]
+REPLIES = {
+    "Story": "In the storm, a brave girl held a light.",
+    "Conversation": "Anna: Was the storm scary?\nBen: A little, but I tried to be brave.",
+}
 
 
 def _study_tab(at: AppTest):
@@ -23,62 +27,84 @@ def _button(at: AppTest, label: str):
     return next(button for button in _study_tab(at).button if button.label == label)
 
 
-def _start(monkeypatch: pytest.MonkeyPatch, history: list[dict], calls: list[list[str]]) -> AppTest:
-    """Run the app with the given history and a fake story writer."""
+def _start(
+    monkeypatch: pytest.MonkeyPatch,
+    history: list[dict],
+    calls: list[tuple[list[str], str]],
+) -> AppTest:
+    """Run the app with the given history and a fake story and conversation writer."""
 
-    def fake_story(words: list[str]) -> str:
-        calls.append(list(words))
-        return "In the storm, a brave girl held a light."
+    def fake_study(words: list[str], style: str) -> str:
+        calls.append((list(words), style))
+        return REPLIES[style]
 
     monkeypatch.setattr("storage.load_history", lambda *_: [dict(entry) for entry in history])
-    monkeypatch.setattr("llm_client.generate_story", fake_story)
+    monkeypatch.setattr("llm_client.generate_study", fake_study)
     return AppTest.from_file(APP_PATH).run()
 
 
 def test_study_tab_selects_every_word_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Show every history word, newest first, all selected."""
+    """Show every history word, newest first, all selected, with a story as the default."""
     at = _start(monkeypatch, HISTORY, [])
-    assert at.session_state.story_words == ["storm", "light", "brave"]
+    assert at.session_state.study_words == ["storm", "light", "brave"]
+    assert at.session_state.study_style == "Story"
     assert _study_tab(at).caption[0].value == "3 of 3 words selected"
 
 
-def test_study_tab_generates_with_selected_words(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_study_tab_generates_story_with_selected_words(monkeypatch: pytest.MonkeyPatch) -> None:
     """Send only the words the user kept and show the story."""
-    calls: list[list[str]] = []
+    calls: list[tuple[list[str], str]] = []
     at = _start(monkeypatch, HISTORY, calls)
-    at.session_state.story_words = ["storm", "brave"]
+    at.session_state.study_words = ["storm", "brave"]
     at.run()
     _button(at, "Generate story").click()
     at.run()
-    assert calls == [["storm", "brave"]]
+    assert calls == [(["storm", "brave"], "Story")]
     assert _study_tab(at).subheader[0].value == "Your story"
+
+
+def test_study_tab_generates_conversation(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Switch to a conversation and show one line per speaker with bold names."""
+    calls: list[tuple[list[str], str]] = []
+    at = _start(monkeypatch, HISTORY, calls)
+    at.session_state.study_style = "Conversation"
+    at.run()
+    _button(at, "Generate conversation").click()
+    at.run()
+    tab = _study_tab(at)
+    assert calls == [(["storm", "light", "brave"], "Conversation")]
+    assert tab.subheader[0].value == "Your conversation"
+    assert tab.markdown[-1].value == (
+        "**Anna:** Was the <u>storm</u> scary?\n\n**Ben:** A little, but I tried to be <u>brave</u>."
+    )
+    assert tab.caption[-1].value == "Not used in this conversation: light"
 
 
 def test_study_tab_clear_and_select_all(monkeypatch: pytest.MonkeyPatch) -> None:
     """Clear every word, refuse to generate, then select all again."""
-    calls: list[list[str]] = []
+    calls: list[tuple[list[str], str]] = []
     at = _start(monkeypatch, HISTORY, calls)
     _button(at, "Clear").click()
     at.run()
-    assert at.session_state.story_words == []
+    assert at.session_state.study_words == []
     _button(at, "Generate story").click()
     at.run()
-    assert _study_tab(at).error[0].value == "Choose at least one word for the story."
+    assert _study_tab(at).error[0].value == "Choose at least one word."
     assert calls == []
     _button(at, "Select all").click()
     at.run()
-    assert at.session_state.story_words == ["storm", "light", "brave"]
+    assert at.session_state.study_words == ["storm", "light", "brave"]
 
 
 def test_study_tab_selects_new_words_and_keeps_exclusions(monkeypatch: pytest.MonkeyPatch) -> None:
     """A newly looked-up word starts selected; an excluded word stays excluded."""
     history = list(HISTORY)
     at = _start(monkeypatch, history, [])
-    at.session_state.story_words = ["storm", "brave"]
+    at.session_state.study_words = ["storm", "brave"]
     at.run()
     history.append({"word": "calm", "senses": [], "sentiment": "positive", "created_at": "2026-01-04"})
     at.run()
-    assert at.session_state.story_words == ["calm", "storm", "brave"]
+    assert at.session_state.study_words == ["calm", "storm", "brave"]
 
 
 def test_study_tab_without_history(monkeypatch: pytest.MonkeyPatch) -> None:

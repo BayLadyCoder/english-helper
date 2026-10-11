@@ -10,8 +10,9 @@ from config import (
     DEFAULT_ACCENT,
     MAX_GRAMMAR_LENGTH,
     MAX_SPEECH_LENGTH,
-    MAX_STORY_WORDS,
+    MAX_STUDY_WORDS,
     MAX_TONE_LENGTH,
+    STUDY_STYLES,
     TONE_OPTIONS,
 )
 from llm_client import (
@@ -19,7 +20,7 @@ from llm_client import (
     MalformedLLMResponseError,
     adjust_tone,
     check_grammar,
-    generate_story,
+    generate_study,
     lookup,
 )
 from models import (
@@ -37,7 +38,7 @@ st.set_page_config(page_title="EnglishHelper", page_icon="EH")
 st.title("EnglishHelper")
 st.write(
     "Look up a word, fix grammar mistakes, rewrite something you wrote in a different tone, "
-    "hear how text is pronounced, or study the words you looked up in a short story."
+    "hear how text is pronounced, or study the words you looked up in a short story or conversation."
 )
 
 if "last_entry" not in st.session_state:
@@ -48,8 +49,8 @@ if "grammar_result" not in st.session_state:
     st.session_state.grammar_result = None
 if "speech" not in st.session_state:
     st.session_state.speech = None
-if "story" not in st.session_state:
-    st.session_state.story = None
+if "study_result" not in st.session_state:
+    st.session_state.study_result = None
 
 _MARKDOWN_SPECIAL = re.compile(r"([\\`*_\[\]~#|<>$:])")
 
@@ -136,24 +137,42 @@ def render_grammar(result: dict) -> None:
                 st.caption(correction["explanation"])
 
 
-def _sync_story_words(words: list[str]) -> None:
+def _sync_study_words(words: list[str]) -> None:
     """Select every word by default, including words added since the last run.
 
     Words the user excluded stay excluded, and deleted words are dropped so the
     selection only holds current options.
     """
-    if "story_words" not in st.session_state:
-        st.session_state.story_words = list(words)
+    if "study_words" not in st.session_state:
+        st.session_state.study_words = list(words)
     else:
-        selected = set(st.session_state.story_words)
-        known = set(st.session_state.get("story_known_words", []))
-        st.session_state.story_words = [w for w in words if w in selected or w not in known]
-    st.session_state.story_known_words = list(words)
+        selected = set(st.session_state.study_words)
+        known = set(st.session_state.get("study_known_words", []))
+        st.session_state.study_words = [w for w in words if w in selected or w not in known]
+    st.session_state.study_known_words = list(words)
 
 
-def _set_story_words(words: list[str]) -> None:
-    """Replace the story selection, used by the select-all and clear buttons."""
-    st.session_state.story_words = list(words)
+def _set_study_words(words: list[str]) -> None:
+    """Replace the word selection, used by the select-all and clear buttons."""
+    st.session_state.study_words = list(words)
+
+
+_SPEAKER_LINE = re.compile(r"^\**(\w[\w .'-]{0,20}?)\**:\**\s*(.*)$")
+
+
+def _study_markdown(text: str, words: list[str], style: str) -> str:
+    """Underline the studied words, one paragraph per line, with bold speaker names."""
+    paragraphs: list[str] = []
+    for line in (line.strip() for line in text.splitlines()):
+        if not line:
+            continue
+        speaker = _SPEAKER_LINE.match(line) if style == "Conversation" else None
+        if speaker:
+            name, speech = speaker.groups()
+            paragraphs.append(f"**{_escape_markdown(name)}:** {highlight_words(speech, words)}")
+        else:
+            paragraphs.append(highlight_words(line, words))
+    return "\n\n".join(paragraphs)
 
 
 lookup_tab, grammar_tab, tone_tab, speech_tab, study_tab, history_tab = st.tabs(
@@ -288,61 +307,71 @@ with speech_tab:
 
 with study_tab:
     try:
-        story_entries = load_history()
+        study_entries = load_history()
     except OSError:
         st.error("The history could not be loaded.")
-        story_entries = []
-    story_entries = sorted(story_entries, key=lambda entry: entry.get("created_at", ""), reverse=True)
-    history_words = list(dict.fromkeys(w for entry in story_entries if (w := str(entry.get("word", "")).strip())))
+        study_entries = []
+    study_entries = sorted(study_entries, key=lambda entry: entry.get("created_at", ""), reverse=True)
+    history_words = list(dict.fromkeys(w for entry in study_entries if (w := str(entry.get("word", "")).strip())))
     if not history_words:
-        st.info("Look up some words first, then turn them into a story here.")
+        st.info("Look up some words first, then study them in a story or conversation here.")
     else:
-        _sync_story_words(history_words)
+        _sync_study_words(history_words)
         st.pills(
             "Words to use",
             history_words,
             selection_mode="multi",
-            key="story_words",
-            help="Click a word to exclude it from the story, or click it again to include it.",
+            key="study_words",
+            help="Click a word to exclude it, or click it again to include it.",
         )
-        selected_words = list(st.session_state.story_words)
+        selected_words = list(st.session_state.study_words)
         with st.container(horizontal=True, vertical_alignment="center"):
             st.caption(f"{len(selected_words)} of {len(history_words)} words selected")
             st.button(
                 "Select all",
                 icon=":material/select_all:",
-                on_click=_set_story_words,
+                on_click=_set_study_words,
                 args=(history_words,),
             )
             st.button(
                 "Clear",
                 icon=":material/deselect:",
-                on_click=_set_story_words,
+                on_click=_set_study_words,
                 args=([],),
             )
-        if st.button("Generate story", icon=":material/auto_stories:", type="primary"):
-            if not selected_words:
-                st.error("Choose at least one word for the story.")
-            elif len(selected_words) > MAX_STORY_WORDS:
-                st.error(f"Choose at most {MAX_STORY_WORDS} words for one story.")
+        style = st.segmented_control(
+            "Format",
+            STUDY_STYLES,
+            default=STUDY_STYLES[0],
+            key="study_style",
+        )
+        kind = (style or STUDY_STYLES[0]).casefold()
+        icon = ":material/forum:" if style == "Conversation" else ":material/auto_stories:"
+        if st.button(f"Generate {kind}", icon=icon, type="primary"):
+            if not style:
+                st.error("Choose a story or a conversation.")
+            elif not selected_words:
+                st.error("Choose at least one word.")
+            elif len(selected_words) > MAX_STUDY_WORDS:
+                st.error(f"Choose at most {MAX_STUDY_WORDS} words at a time.")
             else:
                 try:
-                    with st.spinner("Writing your story..."):
-                        story = generate_story(selected_words)
-                    st.session_state.story = {"text": story, "words": selected_words}
+                    with st.spinner(f"Writing your {kind}..."):
+                        text = generate_study(selected_words, style)
+                    st.session_state.study_result = {"text": text, "words": selected_words, "style": style}
                 except LLMUnavailableError as exc:
                     st.error(str(exc))
                 except MalformedLLMResponseError:
                     st.error("The model returned an unexpected result. Please try again.")
-    if st.session_state.story is not None:
-        story_text = st.session_state.story["text"]
-        story_words = st.session_state.story["words"]
-        st.subheader("Your story")
+    if st.session_state.study_result is not None:
+        result = st.session_state.study_result
+        result_kind = result["style"].casefold()
+        st.subheader(f"Your {result_kind}")
         with st.container(border=True):
-            st.markdown(highlight_words(story_text, story_words), unsafe_allow_html=True)
-        skipped = missing_words(story_text, story_words)
+            st.markdown(_study_markdown(result["text"], result["words"], result["style"]), unsafe_allow_html=True)
+        skipped = missing_words(result["text"], result["words"])
         if skipped:
-            st.caption("Not used in this story: " + ", ".join(skipped))
+            st.caption(f"Not used in this {result_kind}: " + ", ".join(skipped))
 
 with history_tab:
     try:
