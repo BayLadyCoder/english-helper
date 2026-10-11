@@ -10,6 +10,7 @@ from llm_client import (
     _normalize_pos,
     build_prompt,
     call_model,
+    generate_story,
     lookup,
     parse_lookup,
     adjust_tone,
@@ -283,3 +284,44 @@ def test_lookup_stops_after_three_attempts(monkeypatch: pytest.MonkeyPatch) -> N
         lookup("Home")
     assert calls["n"] == 3
     assert "non-empty" in calls["prompts"][1]
+
+
+def test_generate_story_uses_every_word(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Send each word to the model and return the story in one call."""
+    prompts: list[str] = []
+
+    def fake_call(prompt: str, **_: object) -> str:
+        prompts.append(prompt)
+        return "Mia lit a candle and felt brave."
+
+    monkeypatch.setattr("llm_client.call_model", fake_call)
+    assert generate_story(["light", "brave"]) == "Mia lit a candle and felt brave."
+    assert len(prompts) == 1
+    assert "- light\n- brave" in prompts[0]
+
+
+def test_generate_story_retries_with_skipped_words(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Ask again, naming the words the first story left out."""
+    replies = iter(["Mia felt brave.", "Mia lit a candle and felt brave."])
+    prompts: list[str] = []
+
+    def fake_call(prompt: str, **_: object) -> str:
+        prompts.append(prompt)
+        return next(replies)
+
+    monkeypatch.setattr("llm_client.call_model", fake_call)
+    assert generate_story(["light", "brave"]) == "Mia lit a candle and felt brave."
+    assert '"light"' in prompts[1]
+
+
+def test_generate_story_rejects_empty_selection() -> None:
+    """Refuse to call the model without words."""
+    with pytest.raises(ValueError):
+        generate_story(["  "])
+
+
+def test_generate_story_empty_reply_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Treat a blank model reply as malformed."""
+    monkeypatch.setattr("llm_client.call_model", lambda *_args, **_kwargs: "  ")
+    with pytest.raises(MalformedLLMResponseError):
+        generate_story(["light"])

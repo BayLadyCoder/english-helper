@@ -193,15 +193,27 @@ def _lookup_forms(lookup: str) -> list[str]:
     return sorted(forms, key=len, reverse=True)
 
 
+def _lookup_pattern(lookups: list[str]) -> re.Pattern | None:
+    """Match any of the lookups, including a changed verb tense, or None if all are blank."""
+    forms = {form for lookup in lookups if (cleaned := lookup.strip()) for form in _lookup_forms(cleaned)}
+    if not forms:
+        return None
+    alternatives = "|".join(re.escape(form) for form in sorted(forms, key=len, reverse=True))
+    return re.compile(rf"\b(?:{alternatives})\b", re.IGNORECASE)
+
+
 def underline_lookup(text: str, lookup: str) -> str:
     """Return HTML with the lookup, including a changed verb tense, underlined."""
-    cleaned = lookup.strip()
+    return highlight_words(text, [lookup])
+
+
+def highlight_words(text: str, lookups: list[str]) -> str:
+    """Return HTML with every lookup, including a changed verb tense, underlined."""
     if not text:
         return ""
-    if not cleaned:
+    pattern = _lookup_pattern(lookups)
+    if pattern is None:
         return html.escape(text)
-    alternatives = "|".join(re.escape(form) for form in _lookup_forms(cleaned))
-    pattern = re.compile(rf"\b(?:{alternatives})\b", re.IGNORECASE)
     pieces: list[str] = []
     last = 0
     for match in pattern.finditer(text):
@@ -210,6 +222,11 @@ def underline_lookup(text: str, lookup: str) -> str:
         last = match.end()
     pieces.append(html.escape(text[last:]))
     return "".join(pieces)
+
+
+def missing_words(text: str, lookups: list[str]) -> list[str]:
+    """Return the lookups that do not appear in the text in any verb tense."""
+    return [lookup for lookup in lookups if (pattern := _lookup_pattern([lookup])) and not pattern.search(text)]
 
 
 def correction_segments(original: str, correction: str) -> list[tuple[str, str]]:

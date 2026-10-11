@@ -6,6 +6,8 @@ from models import (
     correction_segments,
     entry_from_lookup,
     entry_senses,
+    highlight_words,
+    missing_words,
     underline_lookup,
     validate_lookup_input,
 )
@@ -139,3 +141,15 @@ def test_underline_changed_verb_tense() -> None:
     assert "<u>broke the ice</u>" in phrase
     other = underline_lookup("The sunrise lightened the sky.", "light")
     assert "<u>" not in other
+
+
+def test_highlight_words_underlines_every_word() -> None:
+    """Underline each history word, including a changed verb tense."""
+    html_text = highlight_words("She lit the lamp and broke the ice.", ["light", "break the ice", "lamp"])
+    assert html_text == "She <u>lit</u> the <u>lamp</u> and <u>broke the ice</u>."
+
+
+def test_missing_words_lists_unused_words() -> None:
+    """Report only the words the story never uses."""
+    story = "The kids ran home under a light rain."
+    assert missing_words(story, ["run", "light", "umbrella"]) == ["umbrella"]
