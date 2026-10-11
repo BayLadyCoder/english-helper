@@ -1,7 +1,8 @@
-"""Headless tests for the Study tab. History and the model are mocked."""
+"""Headless tests for the Study tab. History, the model, and Kokoro are mocked."""
 
 from pathlib import Path
 
+import numpy as np
 import pytest
 from streamlit.testing.v1 import AppTest
 
@@ -31,16 +32,31 @@ def _start(
     monkeypatch: pytest.MonkeyPatch,
     history: list[dict],
     calls: list[tuple[list[str], str]],
+    speech_calls: list[tuple[str, str, str]] | None = None,
 ) -> AppTest:
-    """Run the app with the given history and a fake story and conversation writer."""
+    """Run the app with the given history, a fake writer, and a fake speech model."""
 
     def fake_study(words: list[str], style: str) -> str:
         calls.append((list(words), style))
         return REPLIES[style]
 
+    def fake_synthesize(text: str, accent: str, voice: str):
+        if speech_calls is not None:
+            speech_calls.append((text, accent, voice))
+        return np.sin(np.linspace(0, 100, 2400, dtype=np.float32)), 24000
+
     monkeypatch.setattr("storage.load_history", lambda *_: [dict(entry) for entry in history])
     monkeypatch.setattr("llm_client.generate_study", fake_study)
+    monkeypatch.setattr("tts.synthesize", fake_synthesize)
     return AppTest.from_file(APP_PATH).run()
+
+
+def _generate(at: AppTest, style: str = "Story") -> AppTest:
+    """Pick a format, click its generate button, and return the app."""
+    at.session_state.study_style = style
+    at.run()
+    _button(at, f"Generate {style.casefold()}").click()
+    return at.run()
 
 
 def test_study_tab_selects_every_word_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -111,3 +127,41 @@ def test_study_tab_without_history(monkeypatch: pytest.MonkeyPatch) -> None:
     """Explain that words must be looked up first."""
     at = _start(monkeypatch, [], [])
     assert "Look up some words first" in _study_tab(at).info[0].value
+
+
+def test_study_tab_prepares_story_audio_and_reads_on_click(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Prepare the audio right after the story, then play it when Read is clicked."""
+    speech_calls: list[tuple[str, str, str]] = []
+    at = _generate(_start(monkeypatch, HISTORY, [], speech_calls))
+    assert speech_calls == [(REPLIES["Story"], "American", "af_heart")]
+    assert not _study_tab(at).get("audio")
+    _button(at, "Read story").click()
+    at.run()
+    assert len(_study_tab(at).get("audio")) == 1
+    assert len(speech_calls) == 1
+
+
+def test_study_tab_reads_conversation_with_two_voices(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Give each speaker their own voice and leave the names out of the audio."""
+    speech_calls: list[tuple[str, str, str]] = []
+    at = _generate(_start(monkeypatch, HISTORY, [], speech_calls), "Conversation")
+    assert speech_calls == [
+        ("Was the storm scary?", "American", "af_heart"),
+        ("A little, but I tried to be brave.", "American", "am_michael"),
+    ]
+    assert _button(at, "Read conversation")
+
+
+def test_study_tab_warns_when_audio_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the story and explain that the audio is missing, without a Read button."""
+    at = _start(monkeypatch, HISTORY, [])
+
+    def broken_synthesize(*_: object):
+        raise RuntimeError("model missing")
+
+    monkeypatch.setattr("tts.synthesize", broken_synthesize)
+    at = _generate(at)
+    tab = _study_tab(at)
+    assert tab.subheader[0].value == "Your story"
+    assert tab.warning[0].value == "The audio could not be prepared."
+    assert not [button for button in tab.button if button.label == "Read story"]

@@ -160,19 +160,39 @@ def _set_study_words(words: list[str]) -> None:
 _SPEAKER_LINE = re.compile(r"^\**(\w[\w .'-]{0,20}?)\**:\**\s*(.*)$")
 
 
-def _study_markdown(text: str, words: list[str], style: str) -> str:
-    """Underline the studied words, one paragraph per line, with bold speaker names."""
-    paragraphs: list[str] = []
+def _study_lines(text: str, style: str) -> list[tuple[str | None, str]]:
+    """Split study text into (speaker, words) lines; speaker is None outside a conversation."""
+    lines: list[tuple[str | None, str]] = []
     for line in (line.strip() for line in text.splitlines()):
         if not line:
             continue
         speaker = _SPEAKER_LINE.match(line) if style == "Conversation" else None
-        if speaker:
-            name, speech = speaker.groups()
-            paragraphs.append(f"**{_escape_markdown(name)}:** {highlight_words(speech, words)}")
-        else:
-            paragraphs.append(highlight_words(line, words))
-    return "\n\n".join(paragraphs)
+        lines.append(speaker.groups() if speaker else (None, line))
+    return lines
+
+
+def _study_markdown(text: str, words: list[str], style: str) -> str:
+    """Underline the studied words, one paragraph per line, with bold speaker names."""
+    return "\n\n".join(
+        f"**{_escape_markdown(name)}:** {highlight_words(line, words)}" if name else highlight_words(line, words)
+        for name, line in _study_lines(text, style)
+    )
+
+
+def _study_speech_parts(text: str, style: str) -> list[tuple[str, str]]:
+    """Pair each line with a voice: a story uses one voice, and speakers take turns between two."""
+    voices = ACCENTS[DEFAULT_ACCENT]["voices"]
+    if style != "Conversation":
+        return [(text, voices["Female"])]
+    speaker_voices: dict[str, str] = {}
+    parts: list[tuple[str, str]] = []
+    for name, line in _study_lines(text, style):
+        voice = voices["Female"]
+        if name:
+            turn = ("Female", "Male")[len(speaker_voices) % 2]
+            voice = speaker_voices.setdefault(name.casefold(), voices[turn])
+        parts.append((line, voice))
+    return parts
 
 
 lookup_tab, grammar_tab, tone_tab, speech_tab, study_tab, history_tab = st.tabs(
@@ -372,6 +392,27 @@ with study_tab:
         skipped = missing_words(result["text"], result["words"])
         if skipped:
             st.caption(f"Not used in this {result_kind}: " + ", ".join(skipped))
+        if "audio" not in result:
+            try:
+                with st.spinner("Preparing audio..."):
+                    samples, sample_rate = tts.synthesize_parts(
+                        _study_speech_parts(result["text"], result["style"]), DEFAULT_ACCENT
+                    )
+                result["audio"] = {"samples": samples, "sample_rate": sample_rate}
+            except Exception:
+                result["audio"] = None
+        if result["audio"] is None:
+            st.warning("The audio could not be prepared.", icon=":material/volume_off:")
+        else:
+            read_now = st.button(f"Read {result_kind}", icon=":material/volume_up:", key="study_read")
+            if read_now:
+                result["show_player"] = True
+            if result.get("show_player"):
+                st.audio(
+                    result["audio"]["samples"],
+                    sample_rate=result["audio"]["sample_rate"],
+                    autoplay=read_now,
+                )
 
 with history_tab:
     try:

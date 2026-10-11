@@ -22,3 +22,21 @@ def synthesize(text: str, accent: str, voice: str) -> tuple[np.ndarray, int]:
     if not chunks:
         raise ValueError("Nothing to pronounce. Please enter some words.")
     return np.concatenate(chunks), TTS_SAMPLE_RATE
+
+
+def synthesize_parts(
+    parts: list[tuple[str, str]],
+    accent: str,
+    pause_seconds: float = 0.35,
+) -> tuple[np.ndarray, int]:
+    """Read each (text, voice) part in turn and join them with a short pause."""
+    clips: list[np.ndarray] = []
+    sample_rate = TTS_SAMPLE_RATE
+    for text, voice in parts:
+        samples, sample_rate = synthesize(text, accent, voice)
+        if clips:
+            clips.append(np.zeros(int(sample_rate * pause_seconds), dtype=samples.dtype))
+        clips.append(samples)
+    if not clips:
+        raise ValueError("Nothing to pronounce. Please enter some words.")
+    return np.concatenate(clips), sample_rate
