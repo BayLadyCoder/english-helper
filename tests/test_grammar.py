@@ -4,7 +4,14 @@ import json
 
 import pytest
 
-from llm_client import GRAMMAR_SYSTEM_PROMPT, MalformedLLMResponseError, check_grammar, parse_grammar
+from llm_client import (
+    GRAMMAR_SYSTEM_PROMPT,
+    SPLIT_SYSTEM_PROMPT,
+    MalformedLLMResponseError,
+    _is_lumped,
+    check_grammar,
+    parse_grammar,
+)
 
 TEXT = "She go to school yesterday and buy a apple."
 CORRECTED = "She went to school yesterday and bought an apple."
@@ -134,10 +141,10 @@ def test_check_grammar_retries_with_grammar_prompt(monkeypatch: pytest.MonkeyPat
 
 def test_check_grammar_rechecks_and_merges_missed_fixes(monkeypatch: pytest.MonkeyPatch) -> None:
     """Check corrected text again and add the mistake the first pass skipped."""
-    text = "Yesterday I go to office. The team have spent weeks on it."
+    text = "Yesterday I go to the office. The team have spent weeks on it."
     first = "Yesterday I went to the office. The team have spent weeks on it."
     final = "Yesterday I went to the office. The team has spent weeks on it."
-    go = {"original": "I go to office", "correction": "I went to the office", "explanation": "Past."}
+    go = {"original": "I go", "correction": "I went", "explanation": "Past."}
     have = {"original": "team have", "correction": "team has", "explanation": "Singular."}
     responses = {
         text: json.dumps({"corrected_text": first, "corrections": [go]}),
@@ -153,7 +160,7 @@ def test_check_grammar_rechecks_and_merges_missed_fixes(monkeypatch: pytest.Monk
     monkeypatch.setattr("llm_client.call_model", fake_call)
     result = check_grammar(text)
     assert result["corrected_text"] == final
-    assert [c["correction"] for c in result["corrections"]] == ["I went to the office", "team has"]
+    assert [c["correction"] for c in result["corrections"]] == ["I went", "team has"]
     assert result["changed"] is True
     assert len(prompts) == 3
 
@@ -197,6 +204,83 @@ def test_failed_recheck_keeps_earlier_fixes(monkeypatch: pytest.MonkeyPatch) -> 
     result = check_grammar(TEXT)
     assert result["corrected_text"] == CORRECTED
     assert len(result["corrections"]) == 3
+
+
+@pytest.mark.parametrize(
+    ("original", "correction", "lumped"),
+    [
+        ("Me and him goes to meeting.", "He and I go to the meeting.", True),
+        ("and he have went to store", "and he went to the store", True),
+        ("My sister and me was", "My sister and I were", True),
+        ("Me and him", "He and I", False),
+        ("If I would have known", "If I had known", False),
+        ("I bought apple", "I bought an apple", False),
+    ],
+)
+def test_is_lumped(original: str, correction: str, lumped: bool) -> None:
+    """Flag long fixes that change several separate places, not one-rule fixes."""
+    fix = {"original": original, "correction": correction, "explanation": ""}
+    assert _is_lumped(fix) is lumped
+
+
+SPLIT_TEXT = "Me and him goes to meeting."
+SPLIT_CORRECTED = "He and I go to the meeting."
+SPLIT_PARTS = [
+    {"original": "Me and him", "correction": "He and I", "explanation": "Pronoun case."},
+    {"original": "goes", "correction": "go", "explanation": "Plural subject."},
+    {"original": "to meeting", "correction": "to the meeting", "explanation": "Add 'the'."},
+]
+
+
+def _split_fake(split_answers: list[object], calls: list[dict]):
+    """Return a fake model: lumped grammar answers, then the given split answers."""
+    lumped = {"original": SPLIT_TEXT, "correction": SPLIT_CORRECTED, "explanation": "Fixed."}
+    answers = iter(split_answers)
+
+    def fake_call(prompt: str, **kwargs: object) -> str:
+        calls.append({"prompt": prompt, **kwargs})
+        if kwargs.get("system_prompt") == SPLIT_SYSTEM_PROMPT:
+            answer = next(answers)
+            return answer if isinstance(answer, str) else json.dumps({"corrections": answer})
+        if prompt == f"<text>{SPLIT_TEXT}</text>":
+            return json.dumps({"corrected_text": SPLIT_CORRECTED, "corrections": [lumped]})
+        return json.dumps({"corrected_text": SPLIT_CORRECTED, "corrections": []})
+
+    return fake_call
+
+
+def test_lumped_fix_is_split_into_separate_fixes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Replace a whole-sentence fix with one fix per mistake, each with its own reason."""
+    calls: list[dict] = []
+    monkeypatch.setattr("llm_client.call_model", _split_fake([SPLIT_PARTS], calls))
+    result = check_grammar(SPLIT_TEXT)
+    assert result["corrected_text"] == SPLIT_CORRECTED
+    assert result["corrections"] == SPLIT_PARTS
+    split_prompt = calls[-1]["prompt"]
+    assert f"<before>{SPLIT_TEXT}</before>" in split_prompt
+    assert f"<after>{SPLIT_CORRECTED}</after>" in split_prompt
+    assert '- added "the"' in split_prompt
+
+
+def test_split_retries_when_still_combined(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Ask once more when the split answer is still a single entry."""
+    lumped = [{"original": SPLIT_TEXT, "correction": SPLIT_CORRECTED, "explanation": "x"}]
+    calls: list[dict] = []
+    monkeypatch.setattr("llm_client.call_model", _split_fake([lumped, SPLIT_PARTS], calls))
+    assert len(check_grammar(SPLIT_TEXT)["corrections"]) == 3
+    assert "combined several mistakes" in calls[-1]["prompt"]
+
+
+def test_failed_split_keeps_combined_fix(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the original fix when the split answers are unusable or invented."""
+    invented = [
+        {"original": "She go", "correction": "She went", "explanation": "Not in the text."},
+        {"original": "goes", "correction": "go", "explanation": "Plural subject."},
+    ]
+    calls: list[dict] = []
+    monkeypatch.setattr("llm_client.call_model", _split_fake(["not json", invented], calls))
+    corrections = check_grammar(SPLIT_TEXT)["corrections"]
+    assert [c["original"] for c in corrections] == [SPLIT_TEXT]
 
 
 def test_check_grammar_stops_after_three_attempts(monkeypatch: pytest.MonkeyPatch) -> None:
