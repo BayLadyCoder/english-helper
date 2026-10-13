@@ -330,6 +330,15 @@ def test_generate_study_retries_with_skipped_words(monkeypatch: pytest.MonkeyPat
     assert '"light"' in prompts[1]
 
 
+def test_generate_study_strips_angle_brackets(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Remove the angle brackets the model sometimes puts around the studied words."""
+    monkeypatch.setattr(
+        "llm_client.call_model",
+        lambda *_args, **_kwargs: "Mia found <peace of mind> and felt <brave>.",
+    )
+    assert generate_study(["peace of mind", "brave"], "Story") == "Mia found peace of mind and felt brave."
+
+
 @pytest.mark.parametrize("words, style", [(["  "], "Story"), (["light"], "Poem")])
 def test_generate_study_rejects_bad_input(words: list[str], style: str) -> None:
     """Refuse to call the model without words or with an unknown format."""
