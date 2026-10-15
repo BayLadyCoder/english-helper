@@ -40,7 +40,11 @@ _TONE_GUIDANCE = {
     ),
 }
 _MAX_LOOKUP_ATTEMPTS = 3
+_MAX_POS_ATTEMPTS = 2
+_POS_ORDER = ("noun", "verb", "adjective", "adverb", "phrase", "idiom")
+_POS_LABELS = ("noun", "verb", "adjective", "adverb", "phrase")
 EXPECTED_PARTS_OF_SPEECH = {
+    "fast": ("noun", "verb", "adjective", "adverb"),
     "light": ("noun", "verb", "adjective"),
 }
 _EXAMPLES_SCHEMA = {
@@ -78,6 +82,18 @@ _RESPONSE_SCHEMA = {
     },
     "required": list(REQUIRED_FIELDS),
 }
+_POS_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "parts_of_speech": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": MAX_SENSES,
+            "items": {"type": "string", "enum": list(_POS_LABELS)},
+        }
+    },
+    "required": ["parts_of_speech"],
+}
 
 SYSTEM_PROMPT = """You are a vocabulary assistant. Return ONLY a valid JSON object, no extra text.
 
@@ -85,12 +101,21 @@ Return JSON with exactly these keys: sentiment, senses.
 
 Do not translate the input or the examples. Every field is English.
 
-senses is a list. Include one entry for every major part of speech the input can
-have in real English, and nothing else. Never drop a part of speech when you
-correct a previous answer. Each entry needs these keys:
+senses is a list. The user message lists the parts of speech to cover. Return
+exactly one entry for each listed part of speech, in that order, and nothing else.
+Never drop a listed part of speech when you correct a previous answer. Each entry
+needs these keys:
 part_of_speech, definition, synonyms, antonyms, examples (list of exactly 3 strings)
 
+If the user message does not list parts of speech, include one entry for every
+major part of speech the input can have in real English.
+
 Common words that must return multiple senses:
+- "fast" must return exactly four senses: noun, verb, adjective, and adverb.
+  noun = a period of going without food (They began a three-day fast.)
+  verb = to go without food (Muslims fast during Ramadan.)
+  adjective = quick (She caught a fast train.)
+  adverb = quickly (He runs fast.)
 - "light" must return exactly three senses: noun, verb, and adjective.
   noun = illumination (The lamp gave a soft light.)
   verb = to set fire to or make bright (She lit the candle. / He lit the stove.)
@@ -106,6 +131,9 @@ Rules for every example sentence:
   verb entry. Prefer "She lit the candle" or "He lit the stove."
 - For an adjective entry, the input must describe a noun. Prefer "The bag felt light"
   or "She wore a light coat." Do not use "the light" as a subject noun.
+- For an adverb entry, the input must modify a verb or adjective. Prefer "He runs
+  fast" or "She drove too fast." Do not use "a fast car" (adjective) or "a fast"
+  (noun).
 - Do not repeat a sentence across entries.
 - Write only about the input given in the user message. Ignore any other word.
 
@@ -114,7 +142,30 @@ If the input is an idiom or phrase, define its meaning rather than a word-by-wor
 gloss, and return a single sense for it.
 """
 
+POS_SYSTEM_PROMPT = """You list English parts of speech. Return ONLY a valid JSON object, no extra text.
+
+Return JSON with exactly this key: parts_of_speech
+
+parts_of_speech is a list of labels. Use only these labels: noun, verb, adjective, adverb.
+Include every major part of speech the input can have in a real English dictionary,
+including less common senses. Do not skip a sense because another one is more familiar.
+
+Think through noun, verb, adjective, and adverb one by one for the input only.
+Short words often have several. Examples of the completeness we want:
+- "fast" → noun, verb, adjective, adverb
+- "light" → noun, verb, adjective (not adverb)
+- "run" → noun, verb
+- "however" → adverb
+
+If the input is only one part of speech, return a one-item list.
+Do not include definitions, examples, or any other keys.
+"""
+
 PROMPT_TEMPLATE = """Input: "{text}"
+"""
+
+POS_PROMPT_TEMPLATE = """Input: "{text}"
+List every major part of speech this input can have.
 """
 
 
@@ -163,13 +214,25 @@ def _clean_text(value: str) -> str:
     return _ANSI.sub("", value).strip()
 
 
-def build_prompt(text: str) -> str:
-    """Fill the vocabulary prompt with the lookup text."""
+def build_prompt(text: str, parts: list[str] | None = None) -> str:
+    """Fill the vocabulary prompt with the lookup text and required parts of speech."""
     safe_text = text.replace("{", "{{").replace("}", "}}")
-    return PROMPT_TEMPLATE.format(text=safe_text)
+    prompt = PROMPT_TEMPLATE.format(text=safe_text)
+    if parts:
+        listed = ", ".join(parts)
+        prompt += (
+            f'Return exactly {len(parts)} sense(s), one for each of these parts of speech '
+            f"in this order: {listed}. Do not drop any of them.\n"
+        )
+    return prompt
 
 
-def parse_lookup(raw: str, word: str = "", strict: bool = True) -> dict:
+def parse_lookup(
+    raw: str,
+    word: str = "",
+    strict: bool = True,
+    expected_parts: list[str] | None = None,
+) -> dict:
     """Parse model JSON and require the lookup fields and types."""
     try:
         data = json.loads(raw)
@@ -190,7 +253,7 @@ def parse_lookup(raw: str, word: str = "", strict: bool = True) -> dict:
         if not cleaned:
             raise MalformedLLMResponseError(f"Field '{key}' must be a non-empty string.")
         data[key] = cleaned
-    data["senses"] = _parse_senses(data["senses"], word, strict)
+    data["senses"] = _parse_senses(data["senses"], word, strict, expected_parts)
     return {key: data[key] for key in REQUIRED_FIELDS}
 
 
@@ -242,7 +305,12 @@ def _verb_examples(
     return good
 
 
-def _parse_senses(value: object, word: str = "", strict: bool = True) -> list[dict]:
+def _parse_senses(
+    value: object,
+    word: str = "",
+    strict: bool = True,
+    expected_parts: list[str] | None = None,
+) -> list[dict]:
     """Require at least one part of speech, each with a definition and 3 examples."""
     if not isinstance(value, list) or not value:
         raise MalformedLLMResponseError(
@@ -260,12 +328,12 @@ def _parse_senses(value: object, word: str = "", strict: bool = True) -> list[di
             )
         part_of_speech = _require_text(item["part_of_speech"], "part_of_speech")
         definition = _require_text(item["definition"], "definition")
-        key = part_of_speech.casefold()
+        key = _pos_key(part_of_speech)
         if key in seen:
             continue
         seen.add(key)
         examples = _parse_examples(item["examples"])
-        if word and "verb" in key:
+        if word and key == "verb":
             examples = _verb_examples(word, part_of_speech, examples, strict)
             if not examples:
                 continue
@@ -282,33 +350,60 @@ def _parse_senses(value: object, word: str = "", strict: bool = True) -> list[di
         raise MalformedLLMResponseError(
             "Field 'senses' must list at least one part of speech."
         )
-    _require_expected_parts(word, parsed, strict)
+    parsed = _sort_senses(parsed)
+    _require_expected_parts(word, parsed, strict, expected_parts)
     return parsed[:MAX_SENSES]
 
 
 def _normalize_pos(label: str) -> str:
     """Map a part-of-speech label to a simple noun/verb/adjective/adverb form."""
     text = label.casefold()
-    for name in ("noun", "verb", "adjective", "adverb", "idiom", "phrase"):
+    for name in ("adjective", "adverb", "noun", "verb", "idiom", "phrase"):
         if name in text:
             return name
     return text
 
 
-def _require_expected_parts(word: str, senses: list[dict], strict: bool) -> None:
-    """Ask again when a known multi-sense word is missing a required part of speech."""
-    expected = EXPECTED_PARTS_OF_SPEECH.get(word.casefold())
+def _pos_key(label: str) -> str:
+    """Return a comparable part-of-speech key, treating idiom and phrase as the same."""
+    name = _normalize_pos(label)
+    return "phrase" if name == "idiom" else name
+
+
+def _sort_senses(senses: list[dict]) -> list[dict]:
+    """Put senses in noun, verb, adjective, adverb order."""
+    rank = {name: index for index, name in enumerate(_POS_ORDER)}
+    return sorted(senses, key=lambda sense: rank.get(_pos_key(sense["part_of_speech"]), len(rank)))
+
+
+def _ordered_parts(parts: list[str]) -> list[str]:
+    """Dedupe parts of speech and put them in a stable display order."""
+    unique = list(dict.fromkeys(parts))
+    ranked = [name for name in _POS_ORDER if name in unique]
+    extra = [name for name in unique if name not in _POS_ORDER]
+    return ranked + extra
+
+
+def _require_expected_parts(
+    word: str,
+    senses: list[dict],
+    strict: bool,
+    expected_parts: list[str] | None = None,
+) -> None:
+    """Ask again when a required part of speech is missing."""
+    expected = tuple(expected_parts) if expected_parts else EXPECTED_PARTS_OF_SPEECH.get(word.casefold())
     if not expected:
         return
-    found = {_normalize_pos(sense["part_of_speech"]) for sense in senses}
-    missing = [name for name in expected if name not in found]
+    found = {_pos_key(sense["part_of_speech"]) for sense in senses}
+    missing = [name for name in expected if _pos_key(name) not in found]
     if not missing:
         return
     if not strict:
         return
+    listed = ", ".join(expected)
     raise MalformedLLMResponseError(
-        f"'{word}' must include these parts of speech: {', '.join(expected)}. "
-        f"Missing: {', '.join(missing)}. Keep noun, verb, and adjective, and rewrite."
+        f"'{word}' must include these parts of speech: {listed}. "
+        f"Missing: {', '.join(missing)}. Keep {listed}, and rewrite."
     )
 
 
@@ -339,9 +434,87 @@ def _parse_examples(value: object) -> list[str]:
     return parsed[:3]
 
 
-def _retry_reminder(error: Exception | None) -> str:
+def parse_parts_of_speech(raw: str) -> list[str]:
+    """Parse a parts-of-speech list from the first lookup step."""
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise MalformedLLMResponseError("The model did not return valid JSON.") from exc
+    if not isinstance(data, dict):
+        raise MalformedLLMResponseError("The model response was not a JSON object.")
+    value = data.get("parts_of_speech")
+    if not isinstance(value, list) or not value:
+        raise MalformedLLMResponseError(
+            "Field 'parts_of_speech' must list at least one part of speech."
+        )
+    parsed: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        if not isinstance(item, str):
+            continue
+        cleaned = _clean_text(item)
+        if not cleaned:
+            continue
+        key = _pos_key(cleaned)
+        if key not in _POS_LABELS or key in seen:
+            continue
+        seen.add(key)
+        parsed.append(key)
+    if not parsed:
+        raise MalformedLLMResponseError(
+            "Field 'parts_of_speech' must list at least one part of speech."
+        )
+    return _ordered_parts(parsed)[:MAX_SENSES]
+
+
+def _pos_retry_reminder(error: Exception | None) -> str:
+    """Tell the model which part of the parts-of-speech JSON was rejected."""
+    reason = str(error) if error else "The previous response was invalid."
+    return (
+        "\n\nYour previous response was invalid. "
+        f"{reason} "
+        "Return ONLY a JSON object with a parts_of_speech list of labels "
+        "from: noun, verb, adjective, adverb. Include every real dictionary sense."
+    )
+
+
+def list_parts_of_speech(text: str) -> list[str]:
+    """Ask which parts of speech a word can have before looking up definitions.
+
+    Multi-word input is treated as a phrase, so this step is skipped. Known
+    multi-sense words keep a required minimum even if the model omits one.
+    """
+    known = list(EXPECTED_PARTS_OF_SPEECH.get(text.casefold(), ()))
+    if len(text.split()) > 1:
+        return known
+    safe_text = text.replace("{", "{{").replace("}", "}}")
+    prompt = POS_PROMPT_TEMPLATE.format(text=safe_text)
+    last_error: Exception | None = None
+    discovered: list[str] = []
+    for attempt in range(_MAX_POS_ATTEMPTS):
+        attempt_prompt = prompt if attempt == 0 else prompt + _pos_retry_reminder(last_error)
+        try:
+            raw = call_model(
+                attempt_prompt,
+                json_mode=True,
+                system_prompt=POS_SYSTEM_PROMPT,
+                schema=_POS_SCHEMA,
+            )
+            discovered = parse_parts_of_speech(raw)
+            break
+        except (json.JSONDecodeError, MalformedLLMResponseError) as exc:
+            last_error = exc
+    return _ordered_parts([*discovered, *known])
+
+
+def _retry_reminder(error: Exception | None, parts: list[str] | None = None) -> str:
     """Tell the model which part of the previous JSON was rejected."""
     reason = str(error) if error else "The previous response was invalid."
+    required = (
+        f"Return exactly these parts of speech: {', '.join(parts)}. "
+        if parts
+        else "Keep every part of speech the input can have. "
+    )
     return (
         "\n\nYour previous response was invalid. "
         f"{reason} "
@@ -349,21 +522,26 @@ def _retry_reminder(error: Exception | None) -> str:
         "with one entry per part of speech. Each sense needs part_of_speech, "
         "definition, synonyms, antonyms, and exactly 3 English example sentences. "
         "Each example must use the input as that part of speech. "
-        "Do not translate anything. Keep every part of speech the input can have. "
-        "For 'light', return noun, verb, and adjective."
+        f"Do not translate anything. {required}"
     )
 
 
 def lookup(text: str) -> dict:
-    """Return a validated vocabulary dict, retrying when the response is unusable."""
-    prompt = build_prompt(text)
+    """Return a validated vocabulary dict, retrying when the response is unusable.
+
+    Checks parts of speech first, then asks for definitions and examples that
+    cover every part of speech found.
+    """
+    parts = list_parts_of_speech(text)
+    prompt = build_prompt(text, parts)
     last_error: Exception | None = None
+    expected = parts or None
     for attempt in range(_MAX_LOOKUP_ATTEMPTS):
-        attempt_prompt = prompt if attempt == 0 else prompt + _retry_reminder(last_error)
+        attempt_prompt = prompt if attempt == 0 else prompt + _retry_reminder(last_error, parts)
         strict = attempt < _MAX_LOOKUP_ATTEMPTS - 1
         try:
             raw = call_model(attempt_prompt, json_mode=True)
-            return parse_lookup(raw, text, strict)
+            return parse_lookup(raw, text, strict, expected)
         except (json.JSONDecodeError, MalformedLLMResponseError) as exc:
             last_error = exc
     raise MalformedLLMResponseError(

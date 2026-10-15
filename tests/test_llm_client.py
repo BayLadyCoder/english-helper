@@ -7,12 +7,15 @@ import pytest
 from llm_client import (
     LLMUnavailableError,
     MalformedLLMResponseError,
+    POS_SYSTEM_PROMPT,
     _normalize_pos,
     build_prompt,
     call_model,
     generate_study,
+    list_parts_of_speech,
     lookup,
     parse_lookup,
+    parse_parts_of_speech,
     adjust_tone,
 )
 
@@ -42,6 +45,32 @@ def _payload(**overrides: object) -> str:
 def _sense(**overrides: object) -> dict:
     """Return the noun sense with the given overrides applied."""
     return {**NOUN_SENSE, **overrides}
+
+
+def _fast_senses() -> list[dict]:
+    """Return one sense for each of the four parts of speech of 'fast'."""
+    return [
+        _sense(
+            part_of_speech="noun",
+            definition="A period of going without food.",
+            examples=["They began a three-day fast.", "The fast lasted a week.", "She ended her fast."],
+        ),
+        _sense(
+            part_of_speech="verb",
+            definition="To go without food.",
+            examples=["They fast during Ramadan.", "She fasted yesterday.", "He fasts every Friday."],
+        ),
+        _sense(
+            part_of_speech="adjective",
+            definition="Moving or happening quickly.",
+            examples=["She caught a fast train.", "The car was fast.", "He is a fast runner."],
+        ),
+        _sense(
+            part_of_speech="adverb",
+            definition="Quickly.",
+            examples=["He runs fast.", "She drove too fast.", "The news spread fast."],
+        ),
+    ]
 
 
 def test_parse_valid_json() -> None:
@@ -128,6 +157,85 @@ def test_light_requires_noun_verb_adjective() -> None:
     }
 
 
+def test_fast_requires_noun_verb_adjective_adverb() -> None:
+    """Reject a fast lookup that omits one of the four required senses."""
+    senses = _fast_senses()
+    with pytest.raises(MalformedLLMResponseError, match="Missing: adverb"):
+        parse_lookup(_payload(senses=senses[:3]), "fast")
+    parsed = parse_lookup(_payload(senses=senses), "fast")
+    assert [sense["part_of_speech"] for sense in parsed["senses"]] == [
+        "noun",
+        "verb",
+        "adjective",
+        "adverb",
+    ]
+
+
+def test_normalize_pos_distinguishes_adverb_from_verb() -> None:
+    """Keep adverb as adverb; 'verb' is a substring of 'adverb'."""
+    assert _normalize_pos("adverb") == "adverb"
+    assert _normalize_pos("Adverb") == "adverb"
+    assert _normalize_pos("verb") == "verb"
+
+
+def test_parse_parts_of_speech_orders_and_dedupes() -> None:
+    """Keep known labels in noun-verb-adjective-adverb order."""
+    raw = json.dumps({"parts_of_speech": ["Adverb", "noun", "verb", "noun", "adjective"]})
+    assert parse_parts_of_speech(raw) == ["noun", "verb", "adjective", "adverb"]
+
+
+def test_parse_parts_of_speech_rejects_empty() -> None:
+    """Reject a parts-of-speech payload with no usable labels."""
+    with pytest.raises(MalformedLLMResponseError):
+        parse_parts_of_speech(json.dumps({"parts_of_speech": []}))
+    with pytest.raises(MalformedLLMResponseError):
+        parse_parts_of_speech("not json")
+
+
+def test_list_parts_of_speech_for_fast(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Ask the model for parts of speech and keep all four for 'fast'."""
+    prompts: list[str] = []
+
+    def fake_call(prompt: str, *, json_mode: bool = False, **kwargs: object) -> str:
+        prompts.append(prompt)
+        assert json_mode is True
+        assert kwargs["system_prompt"] == POS_SYSTEM_PROMPT
+        return json.dumps({"parts_of_speech": ["adjective", "adverb", "noun", "verb"]})
+
+    monkeypatch.setattr("llm_client.call_model", fake_call)
+    assert list_parts_of_speech("fast") == ["noun", "verb", "adjective", "adverb"]
+    assert "fast" in prompts[0]
+
+
+def test_list_parts_of_speech_fills_in_known_senses(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep a required sense when the model omits it for a known word."""
+    monkeypatch.setattr(
+        "llm_client.call_model",
+        lambda *_args, **_kwargs: json.dumps({"parts_of_speech": ["noun", "verb"]}),
+    )
+    assert list_parts_of_speech("light") == ["noun", "verb", "adjective"]
+    assert list_parts_of_speech("fast") == ["noun", "verb", "adjective", "adverb"]
+
+
+def test_list_parts_of_speech_skips_phrases(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Do not ask the model for parts of speech of a multi-word phrase."""
+
+    def fail(*_args: object, **_kwargs: object) -> str:
+        raise AssertionError("phrases should skip the parts-of-speech call")
+
+    monkeypatch.setattr("llm_client.call_model", fail)
+    assert list_parts_of_speech("break the ice") == []
+
+
+def test_list_parts_of_speech_falls_back_when_the_model_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Use the known list, or nothing, when parts-of-speech JSON is unusable."""
+    monkeypatch.setattr("llm_client.call_model", lambda *_args, **_kwargs: "not json")
+    assert list_parts_of_speech("bicycle") == []
+    assert list_parts_of_speech("fast") == ["noun", "verb", "adjective", "adverb"]
+
+
 def test_empty_senses_raises() -> None:
     """Reject a payload with no parts of speech."""
     with pytest.raises(MalformedLLMResponseError):
@@ -186,6 +294,14 @@ def test_prompt_contains_the_lookup() -> None:
     prompt = build_prompt("bicycle")
     assert "bicycle" in prompt
     assert "Target language" not in prompt
+    assert "parts of speech" not in prompt
+
+
+def test_prompt_names_required_parts_of_speech() -> None:
+    """Tell the details step which parts of speech to cover."""
+    prompt = build_prompt("fast", ["noun", "verb", "adjective", "adverb"])
+    assert "noun, verb, adjective, adverb" in prompt
+    assert "exactly 4 sense" in prompt
 
 
 def test_lookup_retries_once(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -198,10 +314,47 @@ def test_lookup_retries_once(monkeypatch: pytest.MonkeyPatch) -> None:
             return "not json"
         return json.dumps(VALID)
 
+    monkeypatch.setattr("llm_client.list_parts_of_speech", lambda _text: ["noun"])
     monkeypatch.setattr("llm_client.call_model", fake_call)
     result = lookup("bicycle")
     assert calls["n"] == 2
     assert result["senses"][0]["definition"] == NOUN_SENSE["definition"]
+
+
+def test_lookup_checks_parts_of_speech_before_details(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Ask for parts of speech first, then require those senses in the details."""
+    calls: list[str] = []
+    payload = {**VALID, "senses": _fast_senses()}
+
+    def fake_call(
+        prompt: str,
+        *,
+        json_mode: bool = False,
+        system_prompt: str | None = None,
+        **_kwargs: object,
+    ) -> str:
+        calls.append(system_prompt or "")
+        if system_prompt == POS_SYSTEM_PROMPT:
+            return json.dumps({"parts_of_speech": ["noun", "verb", "adjective", "adverb"]})
+        assert "noun, verb, adjective, adverb" in prompt
+        return json.dumps(payload)
+
+    monkeypatch.setattr("llm_client.call_model", fake_call)
+    result = lookup("fast")
+    assert calls[0] == POS_SYSTEM_PROMPT
+    assert calls[1] != POS_SYSTEM_PROMPT
+    assert [sense["part_of_speech"] for sense in result["senses"]] == [
+        "noun",
+        "verb",
+        "adjective",
+        "adverb",
+    ]
+
+
+def test_discovered_parts_are_required() -> None:
+    """Reject details that skip a part of speech the first step found."""
+    with pytest.raises(MalformedLLMResponseError, match="Missing: verb"):
+        parse_lookup(_payload(senses=[NOUN_SENSE]), "run", expected_parts=["noun", "verb"])
 
 
 def test_strips_terminal_color_codes() -> None:
@@ -279,6 +432,7 @@ def test_lookup_stops_after_three_attempts(monkeypatch: pytest.MonkeyPatch) -> N
         calls["prompts"].append(prompt)
         return "still not json"
 
+    monkeypatch.setattr("llm_client.list_parts_of_speech", lambda _text: ["noun"])
     monkeypatch.setattr("llm_client.call_model", fake_call)
     with pytest.raises(MalformedLLMResponseError):
         lookup("Home")
